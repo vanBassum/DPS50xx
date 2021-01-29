@@ -17,7 +17,7 @@
 #include "../components/onewire/onewire.h"
 #include "DPS5020.h"
 
-
+JBVClient client(SoftwareID::DPS50xx);
 
 
 extern "C" {
@@ -40,15 +40,12 @@ esp_err_t event_handler(void *ctx, system_event_t *event)
     return ESP_OK;
 }
 
-/*
+
 void WriteLog(char* str)
 {
 	cJSON *root = cJSON_CreateObject();
-
-
-	cJSON_AddStringToObject(root, "FileName", "DPSLog.json");
+	cJSON_AddStringToObject(root, "FileName", "DPSLog2.json");
 	cJSON_AddStringToObject(root, "Data", str);
-
 	char *bb = cJSON_Print(root);
 
 	Frame frame = Frame();
@@ -58,7 +55,6 @@ void WriteLog(char* str)
 
 	free(bb);
 	cJSON_Delete(root);
-
 	client.SendFrame(&frame);
 }
 
@@ -77,23 +73,24 @@ void Log(char* type, cJSON* obj)
 }
 
 
-void IOutChanged(uint16_t val)
+void IOutChanged(Modbus::Property *prop)
 {
+	float val = prop->Get() / 10;
 	Log("IChange", cJSON_CreateNumber(val));
-	ESP_LOGI("Test", "IOutChanged = %d", val);
+	ESP_LOGI("Test", "IOutChanged = %f", val);
 }
-
-void UOutChanged(uint16_t val)
-{
-	Log("UChange", cJSON_CreateNumber(val));
-	ESP_LOGI("Test", "UOutChanged = %d", val);
-}
-*/
 
 void UOutChanged(Modbus::Property *prop)
 {
-	//Log("UChange", cJSON_CreateNumber(val));
-	ESP_LOGI("Test", "UOutChanged = %d", prop->Get());
+	float val = prop->Get() / 10;
+	Log("UChange", cJSON_CreateNumber(val));
+	ESP_LOGI("Test", "UOutChanged = %f", val);
+}
+
+void TChanged(float val)
+{
+	Log("TChange", cJSON_CreateNumber(val));
+	ESP_LOGI("Test", "TChanged = %f", val);
 }
 
 
@@ -126,15 +123,11 @@ void app_main(void)
 	gpio_set_level(GPIO_NUM_2, 0);
 
 
-	JBVClient client(SoftwareID::DPS50xx);
+
 	TCPConnection con;
 	con.Connect("192.168.11.50", 32770, true);
 	client.SetConnection(&con);
-	//client.HandleFrame = new Callback<void, JBVClient*, Frame*>(HandleFrame);
-
-
-
-
+	client.HandleFrame.Bind(HandleFrame);
 
 	DPS5020 dps;
 	dps.UOut.OnChange.Bind(UOutChanged);
@@ -144,24 +137,19 @@ void app_main(void)
 	OneWire::DS18B20 *tempSensors[10];
 
 	int devCnt = onewire.Search((OneWire::Device **)tempSensors, 10, OneWire::Devices::DS18B20);
-
-
-
-
-
-
-
+	double pTemp = 0;
 	while(1)
 	{
-
-		for(int i=0; i<devCnt; i++)
+		if(devCnt >= 1)
 		{
-			float t = tempSensors[i]->GetTemp();
-			ESP_LOGI("Test", "temp = %f", t);
+			float t = tempSensors[0]->GetTemp();
+			if(pTemp != t)
+			{
+				TChanged(t);
+				pTemp = t;
+			}
 		}
-
-
-		vTaskDelay(1000 / portTICK_PERIOD_MS);
+		vTaskDelay(30000 / portTICK_PERIOD_MS);
 	}
 
 

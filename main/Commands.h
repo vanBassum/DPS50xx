@@ -7,9 +7,9 @@
 
 #ifndef MAIN_COMMANDS_H_
 #define MAIN_COMMANDS_H_
-/*
-#include "../components/CPP_LIB/JBVProtocol.h"
-#include "DPS50XX.h"
+
+#include "../components/jbvprotocol/jbvprotocol.h"
+
 typedef void (*Command)(JBVClient*, Frame*);
 
 void SendACK(JBVClient *client, Frame *rx)
@@ -66,7 +66,7 @@ void HandleFrame(JBVClient *client, Frame *rx)
 	}
 
 }
-*/
+
 
 
 #endif /* MAIN_COMMANDS_H_ */
