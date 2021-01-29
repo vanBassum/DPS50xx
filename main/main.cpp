@@ -12,12 +12,13 @@
 #include "lwip/apps/sntp_opts.h"
 #include "Commands.h"
 #include <cJSON.h>
-//#include "ds18b20.h"
+
+#include "../components/jbvprotocol/jbvclient.h"
+#include "../components/onewire/onewire.h"
 #include "DPS5020.h"
 
-//TCPConnection con;
-//JBVClient client(SoftwareID::DPS50xx);
-//DPS50XX dps;
+
+
 
 extern "C" {
    void app_main();
@@ -125,18 +126,43 @@ void app_main(void)
 	gpio_set_level(GPIO_NUM_2, 0);
 
 
+	JBVClient client(SoftwareID::DPS50xx);
+	TCPConnection con;
+	con.Connect("192.168.11.50", 32770, true);
+	client.SetConnection(&con);
+	//client.HandleFrame = new Callback<void, JBVClient*, Frame*>(HandleFrame);
+
+
+
 
 
 	DPS5020 dps;
-
-	dps.USet.Set(100);
-
 	dps.UOut.OnChange.Bind(UOutChanged);
 
+
+	OneWire::Bus onewire(GPIO_NUM_4);
+	OneWire::DS18B20 *tempSensors[10];
+
+	int devCnt = onewire.Search((OneWire::Device **)tempSensors, 10, OneWire::Devices::DS18B20);
+
+
+
+
+
+
+
 	while(1)
-		vTaskDelay(5000 / portTICK_PERIOD_MS);
+	{
+
+		for(int i=0; i<devCnt; i++)
+		{
+			float t = tempSensors[i]->GetTemp();
+			ESP_LOGI("Test", "temp = %f", t);
+		}
 
 
+		vTaskDelay(1000 / portTICK_PERIOD_MS);
+	}
 
 
 	/*
