@@ -65,6 +65,7 @@ void Log(char* type, cJSON* obj)
 	cJSON *root = cJSON_CreateObject();
 	cJSON_AddStringToObject(root, "Type", type);
 	cJSON_AddNumberToObject(root, "TimeStamp", DateTime::Now().MKTime());
+	cJSON_AddStringToObject(root, "GUID", client.GetGuid().ToString().c_str());
 	cJSON_AddItemToObject(root, "Data", obj);
 	char *bb = cJSON_Print(root);
 	WriteLog(bb);
@@ -131,6 +132,7 @@ void app_main(void)
 
 	DPS5020 dps;
 	dps.UOut.OnChange.Bind(UOutChanged);
+	dps.IOut.OnChange.Bind(IOutChanged);
 
 
 	OneWire::Bus onewire(GPIO_NUM_4);

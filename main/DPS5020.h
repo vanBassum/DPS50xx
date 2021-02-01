@@ -40,7 +40,7 @@ private:
 					ex = propList[i]->Sync(modbus, 2000);
 
 				if(ex != Modbus::Exception::NoError)
-					ESP_LOGE("Intesis", "MODBUS error while syncing %d", (int)ex);
+					ESP_LOGE("DPS5020", "MODBUS error while syncing %d", (int)ex);
 			}
 			vTaskDelay(1000 / portTICK_PERIOD_MS);
 		}
@@ -52,7 +52,7 @@ public:
 	DPS5020()
 	{
 		modbus = new Modbus::ModbusRTU(UART_NUM_2, 9600);
-		syncTask = new FreeRTOS::Task("DPS5020", 7, 1024, this, &DPS5020::SyncTask);
+		syncTask = new FreeRTOS::Task("DPS5020", 7, 1024 * 8, this, &DPS5020::SyncTask);
 		syncTask->Run(NULL);
 	}
 
