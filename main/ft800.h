@@ -336,10 +336,10 @@ void HOST_CMD_WRITE(uint8_t CMD);	/* send host command */
 //void HOST_MEM_WR_STR(uint32_t addr, uint8_t *pnt, uint8_t len);		/* write len bytes of data into memory */
 
 void HOST_MEM_WR8(uint32_t addr, uint8_t data);		/* write  8bit (1byte)  data to memory */
-void HOST_MEM_WR16(uint32_t addr, uint32_t data);	/* write 16bit (2bytes) data to memory */
+void HOST_MEM_WR16(uint32_t addr, uint16_t data);	/* write 16bit (2bytes) data to memory */
 void HOST_MEM_WR32(uint32_t addr, uint32_t data);	/* write 32bit (4bytes) data to memory */
 uint8_t HOST_MEM_RD8(uint32_t addr);				/* read  8bit  (1byte)  data from memory */
-uint32_t HOST_MEM_RD16(uint32_t addr);				/* read  16bit (2bytes) data from memory */
+uint16_t HOST_MEM_RD16(uint32_t addr);				/* read  16bit (2bytes) data from memory */
 uint32_t HOST_MEM_RD32(uint32_t addr);				/* read  32bit (4bytes) data from memory */
 
 /*** CO-PROCESSOR ******************************************************************/

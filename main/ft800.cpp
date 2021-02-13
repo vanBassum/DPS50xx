@@ -121,16 +121,18 @@ uint8_t initFT800(void)
 
 
 
+	//HOST_CMD_WRITE(CMD_ACTIVE);
 
-	HOST_CMD_ACTIVE();
-	sysDms(500);
+	//sysDms(500);
 
 	//Ext Clock
 	HOST_CMD_WRITE(CMD_CLKEXT);         // Send CLK_EXT Command (0x44)
+	HOST_CMD_WRITE(CMD_ACTIVE);
 
 	//PLL (48M) Clock
-	HOST_CMD_WRITE(CMD_CLK48M);         // Send CLK_48M Command (0x62)
+	//HOST_CMD_WRITE(CMD_CLK48M);         // Send CLK_48M Command (0x62)
 
+	sysDms(50);
 
 	//Read Dev ID
 	dev_id = HOST_MEM_RD8(REG_ID);      	// Read device id
@@ -140,9 +142,10 @@ uint8_t initFT800(void)
 	}
 	else
 	{
-		ESP_LOGE("FT800", "DevID invalid %d", dev_id);
+		ESP_LOGE("FT800", "DevID invalid %x", dev_id);
 		return 1;
 	}
+
 
 
 
@@ -202,10 +205,6 @@ uint8_t initFT800(void)
 	HOST_MEM_WR16(REG_SOUND, 0);
 	HOST_MEM_WR8(REG_PLAY, 1);
 
-
-
-
-	sysDms(50000);
 
 	return 0;
 }
@@ -280,106 +279,97 @@ void HOST_MEM_WR_STR(uint32_t addr, uint8_t *pnt, uint8_t len)
 }
 */
 
+
+
+
+void HOST_MEM_RD(uint32_t addr, void* rx, int len)
+{
+	uint8_t txBuf[4 + len];
+	uint8_t rxBuf[4 + len];
+	txBuf[0] = 0x3F & (addr >> 16);
+	txBuf[1] = 0xFF & (addr >> 8);
+	txBuf[2] = 0xFF & (addr);
+	txBuf[3] = 0x00; //DUMMY
+	SPI_WRT(txBuf, rxBuf, sizeof(txBuf));
+	memcpy(rx, &rxBuf[4], len);
+}
+
+void HOST_MEM_WR(uint32_t addr, void* tx, int len)
+{
+	uint8_t txBuf[3 + len];
+	txBuf[0] = (0x3F & (addr >> 16)) | 0x80;
+	txBuf[1] = 0xFF & (addr >> 8);
+	txBuf[2] = 0xFF & (addr);
+	memcpy(&txBuf[3], tx, len);
+	SPI_WRT(txBuf, NULL, sizeof(txBuf));
+}
+
+void HOST_CMD(uint32_t cmd)
+{
+	uint8_t tx[3];
+	if(cmd == CMD_ACTIVE)
+	{
+		tx[0] = 0x00;
+		tx[1] = 0x00;
+		tx[2] = 0x00;
+	}
+	else
+	{
+		tx[0] = (0x3F & cmd) | 0x40;
+		tx[1] = 0x00;
+		tx[2] = 0x00;
+	}
+	SPI_WRT(tx, NULL, sizeof(tx));
+}
+
 void HOST_CMD_WRITE(uint8_t CMD)
 {
-	uint8_t tx[3];
-	tx[0] = (uint8_t)(CMD|0x40);		// Send out Command, bits 7:6 must be 01
-	tx[1] = 0x00;
-	tx[2] = 0x00;
-	SPI_WRT(tx, NULL, sizeof(tx));
+	HOST_CMD(CMD);
 }
-
-void HOST_CMD_ACTIVE(void)
-{
-	uint8_t tx[3];
-	tx[0] = 0x00;
-	tx[1] = 0x00;
-	tx[2] = 0x00;
-	SPI_WRT(tx, NULL, sizeof(tx));
-}
-
 
 void HOST_MEM_WR8(uint32_t addr, uint8_t data)
 {
-	uint8_t tx[4];
-	tx[0] = (addr>>16)|0x80;
-	tx[1] = (addr>>8)&0xFF;
-	tx[2] = addr&0xFF;
-	tx[3] = data;
-	SPI_WRT(tx, NULL, sizeof(tx));
+	HOST_MEM_WR(addr, &data, 1);
 }
 
-void HOST_MEM_WR16(uint32_t addr, uint32_t data)
+void HOST_MEM_WR16(uint32_t addr, uint16_t data)
 {
-	uint8_t tx[5];
-	tx[0] = (addr>>16)|0x80;
-	tx[1] = (addr>>8)&0xFF;
-	tx[2] = addr&0xFF;
-
-	/* Little-Endian: Least Significant Byte to: smallest address */
-	tx[3] = (data) & 0xFF;
-	tx[4] = (data >> 8) & 0xFF;
-	SPI_WRT(tx, NULL, sizeof(tx));
+	uint8_t rx[2];
+	rx[0] = data;
+	rx[1] = data >> 8;
+	HOST_MEM_WR(addr, rx, sizeof(rx));
 }
 
 void HOST_MEM_WR32(uint32_t addr, uint32_t data)
 {
-	uint8_t tx[7];
-	tx[0] = (addr>>16)|0x80;
-	tx[1] = (addr>>8)&0xFF;
-	tx[2] = addr&0xFF;
-
-	/* Little-Endian: Least Significant Byte to: smallest address */
-	tx[3] = (data) & 0xFF;
-	tx[4] = (data >> 8) & 0xFF;
-	tx[5] = (data >> 16) & 0xFF;
-	tx[6] = (data >> 24) & 0xFF;
-	SPI_WRT(tx, NULL, sizeof(tx));
+	uint8_t rx[4];
+	rx[0] = data;
+	rx[1] = data >> 8;
+	rx[2] = data >> 16;
+	rx[3] = data >> 24;
+	HOST_MEM_WR(addr, rx, sizeof(rx));
 }
 
 uint8_t HOST_MEM_RD8(uint32_t addr)
 {
-	uint8_t tx[6];
-	uint8_t rx[6];
-	tx[0] = (addr>>16)|0x80;	//10
-	tx[1] = (addr>>8)&0xFF;		//24
-	tx[2] = addr&0xFF;			//00
-	tx[3] = 0;					//dummy
-	tx[4] = 0;
-	tx[5] = 0;
-	SPI_WRT(tx, rx, sizeof(tx));
-
-	ESP_LOGI("", "%x %x %x %x %x %x", rx[0], rx[1], rx[2], rx[3], rx[4], rx[5]);
-
-	return rx[5];
+	uint8_t rx[1];
+	HOST_MEM_RD(addr, rx, sizeof(rx));
+	return rx[0];
 }
 
-uint32_t HOST_MEM_RD16(uint32_t addr)
+uint16_t HOST_MEM_RD16(uint32_t addr)
 {
-	uint8_t tx[7];
-	uint8_t rx[7];
-	tx[0] = (addr>>16)|0x80;
-	tx[1] = (addr>>8)&0xFF;
-	tx[2] = addr&0xFF;
-	tx[3] = 0;	//dummy
-
-	SPI_WRT(tx, rx, sizeof(tx));
-	return rx[5] | (rx[6]<<8);
+	uint8_t rx[2];
+	HOST_MEM_RD(addr, rx, sizeof(rx));
+	return rx[0] | rx[1]<<8;
 }
 
 
 uint32_t HOST_MEM_RD32(uint32_t addr)
 {
-	uint8_t tx[9];
-	uint8_t rx[9];
-	tx[0] = (addr>>16)|0x80;
-	tx[1] = (addr>>8)&0xFF;
-	tx[2] = addr&0xFF;
-	tx[3] = 0;	//dummy
-
-	SPI_WRT(tx, rx, sizeof(tx));
-
-	return rx[5] | (rx[6]<<8) | (rx[7]<<16) | (rx[8]<<24);
+	uint8_t rx[4];
+	HOST_MEM_RD(addr, rx, sizeof(rx));
+	return rx[0] | rx[1]<<8 | rx[2]<<16 | rx[3]<<24;
 }
 
 
