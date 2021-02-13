@@ -35,7 +35,7 @@ static const gpio_num_t GPIO_MISO 	= (gpio_num_t)5;
 static const gpio_num_t GPIO_CS 	= (gpio_num_t)17;
 static const gpio_num_t GPIO_INT 	= (gpio_num_t)16;
 static const gpio_num_t GPIO_PD 	= (gpio_num_t)4;
-static const int SPI_Frequency 		= 1000000;
+static const int SPI_Frequency 		= 10000000;
 
 spi_bus_config_t buscfg;
 spi_device_interface_config_t devcfg;
@@ -47,6 +47,7 @@ void sysDms(uint32_t millisec)
 {
 	vTaskDelay(millisec / portTICK_PERIOD_MS);
 }
+
 
 void InitBus()
 {
@@ -147,6 +148,7 @@ uint8_t initFT800(void)
 	}
 
 
+
 	HOST_MEM_WR8(REG_GPIO, 0x00);			// Set REG_GPIO to 0 to turn off the LCD DISP signal
 	HOST_MEM_WR8(REG_PCLK, 0x00);      		// Pixel Clock Output disable
 
@@ -163,6 +165,8 @@ uint8_t initFT800(void)
 	HOST_MEM_WR8(REG_CSPREAD, 1);           // Set CSPREAD to 1
 	HOST_MEM_WR16(REG_HSIZE, 480);          // Set H_SIZE to 480
 	HOST_MEM_WR16(REG_VSIZE, 272);          // Set V_SIZE to 272
+
+
 
 	/* configure touch & audio */
 	HOST_MEM_WR8(REG_TOUCH_MODE, 0x03);     	//set touch on: continous
@@ -184,19 +188,6 @@ uint8_t initFT800(void)
 	HOST_MEM_WR8(REG_PWM_DUTY, 0x80);                 // Backlight PWM duty
 
 	HOST_MEM_WR8(REG_PCLK, 0x05);                     // After this display is visible on the LCD
-
-
-	//Sound???
-	sysDms(1000);
-	HOST_MEM_WR8(REG_VOL_SOUND, 0xFF);
-	HOST_MEM_WR16(REG_SOUND, (0x6C<< 8) | 0x41);
-	HOST_MEM_WR8(REG_PLAY, 1);
-
-	sysDms(1000);
-	HOST_MEM_WR16(REG_SOUND, 0);
-	HOST_MEM_WR8(REG_PLAY, 1);
-
-
 	return 0;
 }
 
