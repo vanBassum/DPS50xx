@@ -7,16 +7,175 @@
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "ft800.h"
+#include "../components/tft/Color.h"
 
 #include "lwip/apps/sntp.h"
 #include "lwip/apps/sntp_opts.h"
 
 #include <stdint.h>
 #include <string.h>
+#include <vector>
+#include <string>
 
 extern "C" {
    void app_main();
 }
+
+
+class Pen
+{
+public:
+	Color color = Color(255,0 ,0);
+	int Width = 1;
+
+	Pen()
+	{
+
+	}
+
+	Pen(uint8_t r, uint8_t g, uint8_t b, int width = 1)
+	{
+		color = Color(r, g, b);
+		Width = width;
+	}
+};
+
+
+class Graphics
+{
+public:
+	Graphics(){}
+	virtual ~Graphics(){}
+	virtual void DrawLine(Pen pen, int x1, int y1, int x2, int y2) = 0;
+	virtual void DrawString(Color c, int x, int y, std::string text, int height) = 0;
+	virtual void FillCircle(Color c, int x, int y, int size) = 0;
+	virtual void FillRectangle(Color c, int x, int y, int width, int height, int curve) = 0;
+
+};
+
+
+
+
+class Control
+{
+protected:
+	virtual void Paint(Graphics *graphics) = 0;
+
+public:
+	Control(){}
+	virtual ~Control(){}
+
+	void Draw(Graphics *graphics)
+	{
+		Paint(graphics);
+	}
+};
+
+
+class Label : public Control
+{
+public:
+	int X = 50;
+	int Y = 50;
+	int Width = 100;
+	int Height = 15;
+	Pen BorderPen = Pen(0, 0, 0, 1);
+	std::string Text = "Label";
+
+
+protected:
+	void Paint(Graphics *graphics)
+	{
+		ESP_LOGI("Label", "Paint");
+		graphics->DrawLine(BorderPen, X, Y, X + Width, Y);						//Top
+		graphics->DrawLine(BorderPen, X + Width, Y, X + Width, Y + Height);		//Right
+		graphics->DrawLine(BorderPen, X + Width, Y + Height, X, Y + Height);	//Bottom
+		graphics->DrawLine(BorderPen, X, Y, X, Y + Height);						//Left
+		graphics->DrawString(Color(0, 0, 0), X, Y, Text, 12);
+	}
+};
+
+
+
+
+
+
+class FT800 : public Graphics
+{
+public:
+	std::vector<Control*> Controls;
+
+	FT800()
+	{
+		while(initFT800());
+	}
+
+	void DrawLine(Pen pen, int x1, int y1, int x2, int y2)
+	{
+		cmd(COLOR_RGB(pen.color.R, pen.color.G, pen.color.B));
+		cmd(LINE_WIDTH(pen.Width * 16));
+		cmd(BEGIN(LINES));
+		cmd(VERTEX2F(x1 * 16, y1 * 16));
+		cmd(VERTEX2F(x2 * 16, y2 * 16));
+		cmd(END());
+	}
+
+	void FillCircle(Color c, int x, int y, int size)
+	{
+		cmd(COLOR_RGB(c.R, c.G, c.B));
+		cmd(POINT_SIZE(size * 16));
+		cmd(BEGIN(FTPOINTS));
+		cmd(VERTEX2F(x * 16, y * 16));
+		cmd(END());
+	}
+
+	void FillRectangle(Color c, int x, int y, int width, int height, int curve)
+	{
+		cmd(COLOR_RGB(c.R, c.G, c.B));
+		cmd(LINE_WIDTH(curve * 16));
+		cmd(BEGIN(RECTS));
+		cmd(VERTEX2F(x * 16, y * 16));
+		cmd(VERTEX2F((x + width) * 16, (y + height) * 16));
+		cmd(END());
+	}
+
+	void Fill(Color c)
+	{
+		cmd(CLEAR_COLOR_RGB(c.R, c.G, c.B));
+		cmd(CLEAR(1,1,1));
+	}
+
+	void DrawString(Color c, int x, int y, std::string text, int height)
+	{
+
+		cmd(COLOR_RGB(c.R, c.G, c.B));
+		cmd(BEGIN(BITMAPS));
+
+		for(int i=0; i<text.length(); i++)
+		{
+			cmd(VERTEX2II(i * 10 + x, y, 16, text[i]));
+		}
+
+		cmd(END());
+	}
+
+	void Draw()
+	{
+		cmd(CMD_DLSTART);
+		Fill(Color(255, 255, 255));
+
+		for(int i=0; i<Controls.size(); i++)
+			Controls[i]->Draw(this);
+
+		cmd(DISPLAY());
+		cmd(CMD_SWAP);
+	}
+
+
+
+
+
+};
 
 
 
@@ -24,33 +183,19 @@ extern "C" {
 
 void Test()
 {
-	while(initFT800());
-	sysDms(500);
-	//SPI_speedup();
+	FT800 ft800;
 
-	clrscr();
+	Label label;
 
-	lcd_start_screen(0);
+
+	ft800.Controls.push_back(&label);
+
+
+
+	ft800.Draw();
 
 	while(1)
-	{
-
-		uint32_t tag = HOST_MEM_RD32(REG_TOUCH_TAG);
-
-		//button pressed
-		if(tag == 1)
-		{
-			lcd_start_screen(1);
-		}
-		else
-		{
-			lcd_start_screen(0);
-		}
-		sysDms(500);
-	}
-
-
-
+		vTaskDelay(30000 / portTICK_PERIOD_MS);
 }
 
 

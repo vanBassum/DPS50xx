@@ -147,8 +147,6 @@ uint8_t initFT800(void)
 	}
 
 
-
-
 	HOST_MEM_WR8(REG_GPIO, 0x00);			// Set REG_GPIO to 0 to turn off the LCD DISP signal
 	HOST_MEM_WR8(REG_PCLK, 0x00);      		// Pixel Clock Output disable
 
@@ -188,99 +186,19 @@ uint8_t initFT800(void)
 	HOST_MEM_WR8(REG_PCLK, 0x05);                     // After this display is visible on the LCD
 
 
-
-
-	cmd(CMD_DLSTART);
-	cmd(CLEAR_COLOR_RGB(255,0,0));
-	cmd(CLEAR(1,1,1));
-	cmd(DISPLAY());
-	cmd(CMD_SWAP);
-
+	//Sound???
+	sysDms(1000);
 	HOST_MEM_WR8(REG_VOL_SOUND, 0xFF);
 	HOST_MEM_WR16(REG_SOUND, (0x6C<< 8) | 0x41);
 	HOST_MEM_WR8(REG_PLAY, 1);
 
 	sysDms(1000);
-
 	HOST_MEM_WR16(REG_SOUND, 0);
 	HOST_MEM_WR8(REG_PLAY, 1);
 
 
 	return 0;
 }
-
-/* Clear Screen */
-void clrscr(void)
-{
-	cmd(CMD_DLSTART);
-	cmd(CLEAR_COLOR_RGB(0,0,0));
-	cmd(CLEAR(1,1,1));
-	cmd(DISPLAY());
-	cmd(CMD_SWAP);
-}
-
-/* Demo Screen */
-void lcd_start_screen(uint8_t button)
-{
-	cmd(CMD_DLSTART);
-	cmd(CLEAR_COLOR_RGB(0,0,0));
-	cmd(CLEAR(1,1,1));
-	cmd_gradient(0,0,0xA1E1FF, 0,250,0x000080);
-	cmd_text(10,245, 27,0, "Designed by: Akos Pasztor");
-	cmd_text(470,250, 26,OPT_RIGHTX, "http://akospasztor.com");
-	cmd(COLOR_RGB(0xDE,0x00,0x08));
-	cmd_text(240,40, 31,OPT_CENTERX, "FT800 Demo");
-	cmd(COLOR_RGB(255,255,255));
-	cmd(TAG(1));
-
-	if(!button)
-	{
-		cmd_fgcolor(0x228B22);
-		cmd_button(130,150, 220,48, 28,0, "Tap to Continue");
-	}
-	else
-	{
-		cmd_fgcolor(0x0A520A);
-		cmd_button(130,150, 220,48, 28,OPT_FLAT, "Tap to Continue");
-	}
-
-	cmd(DISPLAY());
-	cmd(CMD_SWAP);
-}
-
-
-/*
-
-void HOST_MEM_READ_STR(uint32_t addr, uint8_t *pnt, uint8_t len)
-{
-	uint8_t tx[4 + len];
-	uint8_t rx[4 + len];
-
-	memset(tx, 0, sizeof(tx));
-
-	tx[0] = (addr>>16)&0x3F;			// Send out bits 23:16 of addr, bits 7:6 of this byte must be 00
-	tx[1] = (addr>>8)&0xFF;				// Send out bits 15:8 of addr
-	tx[2] = (addr&0xFF);				// Send out bits 7:0 of addr
-	tx[3] = 0x00;						// Send out DUMMY (0) byte
-
-	SPI_WRT(tx, rx, sizeof(tx));
-}
-
-
-
-void HOST_MEM_WR_STR(uint32_t addr, uint8_t *pnt, uint8_t len)
-{
-	uint8_t tx[3 + len];
-	tx[0] = ((addr>>16)&0x3F) | 0x80;	// Send out 23:16 of addr, bits 7:6 of this byte must be 10
-	tx[1] = (addr>>8)&0xFF;				// Send out bits 15:8 of addr
-	tx[2] = (addr&0xFF);				// Send out bits 7:0 of addr
-	memcpy(&tx[3], pnt, len);
-	SPI_WRT(tx, NULL, sizeof(tx));
-}
-*/
-
-
-
 
 void HOST_MEM_RD(uint32_t addr, void* rx, int len)
 {
