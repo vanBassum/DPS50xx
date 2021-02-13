@@ -6,23 +6,59 @@
 #include "esp_sntp.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
-#include "driver/gpio.h"
-#include <string.h>
+#include "ft800.h"
+
 #include "lwip/apps/sntp.h"
 #include "lwip/apps/sntp_opts.h"
-#include "Commands.h"
-#include <cJSON.h>
 
-#include "../components/jbvprotocol/jbvclient.h"
-#include "../components/onewire/onewire.h"
-#include "DPS5020.h"
-
-JBVClient client(SoftwareID::DPS50xx);
-
+#include <stdint.h>
+#include <string.h>
 
 extern "C" {
    void app_main();
 }
+
+
+
+
+
+void Test()
+{
+	while(initFT800());
+	sysDms(500);
+	//SPI_speedup();
+
+	clrscr();
+
+	lcd_start_screen(0);
+
+	while(1)
+	{
+
+		uint32_t tag = HOST_MEM_RD32(REG_TOUCH_TAG);
+
+		//button pressed
+		if(tag == 1)
+		{
+			lcd_start_screen(1);
+		}
+		else
+		{
+			lcd_start_screen(0);
+		}
+		sysDms(500);
+	}
+
+
+
+}
+
+
+
+
+
+
+
 
 
 
@@ -41,58 +77,8 @@ esp_err_t event_handler(void *ctx, system_event_t *event)
 }
 
 
-void WriteLog(char* str)
-{
-	cJSON *root = cJSON_CreateObject();
-	cJSON_AddStringToObject(root, "FileName", "DPSLog2.json");
-	cJSON_AddStringToObject(root, "Data", str);
-	char *bb = cJSON_Print(root);
-
-	Frame frame = Frame();
-	frame.RxID = 1;
-	frame.CommandID = 2;
-	frame.SetData((uint8_t*)bb, strlen(bb));
-
-	free(bb);
-	cJSON_Delete(root);
-	client.SendFrame(&frame);
-}
 
 
-
-void Log(char* type, cJSON* obj)
-{
-	cJSON *root = cJSON_CreateObject();
-	cJSON_AddStringToObject(root, "Type", type);
-	cJSON_AddNumberToObject(root, "TimeStamp", DateTime::Now().MKTime());
-	cJSON_AddStringToObject(root, "GUID", client.GetGuid().ToString().c_str());
-	cJSON_AddItemToObject(root, "Data", obj);
-	char *bb = cJSON_Print(root);
-	WriteLog(bb);
-	free(bb);
-	cJSON_Delete(root);
-}
-
-
-void IOutChanged(Modbus::Property *prop)
-{
-	float val = prop->Get() / 10;
-	Log("IChange", cJSON_CreateNumber(val));
-	ESP_LOGI("Test", "IOutChanged = %f", val);
-}
-
-void UOutChanged(Modbus::Property *prop)
-{
-	float val = prop->Get() / 10;
-	Log("UChange", cJSON_CreateNumber(val));
-	ESP_LOGI("Test", "UOutChanged = %f", val);
-}
-
-void TChanged(float val)
-{
-	Log("TChange", cJSON_CreateNumber(val));
-	ESP_LOGI("Test", "TChanged = %f", val);
-}
 
 
 void app_main(void)
@@ -120,66 +106,11 @@ void app_main(void)
 	sntp_setservername(0, "pool.ntp.org");
 	sntp_init();
 
-	gpio_set_direction(GPIO_NUM_2, GPIO_MODE_OUTPUT);
-	gpio_set_level(GPIO_NUM_2, 0);
 
 
-
-	TCPConnection con;
-	con.Connect("192.168.11.50", 32770, true);
-	client.SetConnection(&con);
-	client.HandleFrame.Bind(HandleFrame);
-
-	DPS5020 dps;
-	dps.UOut.OnChange.Bind(UOutChanged);
-	dps.IOut.OnChange.Bind(IOutChanged);
-
-
-	OneWire::Bus onewire(GPIO_NUM_4);
-	OneWire::DS18B20 *tempSensors[10];
-
-	int devCnt = onewire.Search((OneWire::Device **)tempSensors, 10, OneWire::Devices::DS18B20);
-	double pTemp = 0;
+	Test();
 	while(1)
-	{
-		if(devCnt >= 1)
-		{
-			float t = tempSensors[0]->GetTemp();
-			if(pTemp != t)
-			{
-				TChanged(t);
-				pTemp = t;
-			}
-		}
 		vTaskDelay(30000 / portTICK_PERIOD_MS);
-	}
-
-
-	/*
-	con.Connect("192.168.11.14", 1000, true);
-	client.SetConnection(&con);
-	client.HandleFrame = new Callback<void, JBVClient*, Frame*>(HandleFrame);
-
-
-	dps.IOut.OnChange.Bind(&IOutChanged);
-	dps.UOut.OnChange.Bind(&UOutChanged);
-
-	ds18b20_init(GPIO_NUM_4);
-
-	int itemp = 0;
-
-    while(true)
-    {
-    	float temp = ds18b20_get_temp();
-    	int newTemp = temp * 10;
-    	if(itemp != newTemp)
-    	{
-    		itemp = newTemp;
-    		Log("TChange", cJSON_CreateNumber(itemp));
-    		ESP_LOGI("Test", "TempChanged = %d", itemp);
-    	}
-    	vTaskDelay(5000 / portTICK_PERIOD_MS);
-    }*/
 }
 
 
