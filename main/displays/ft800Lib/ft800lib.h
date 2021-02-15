@@ -367,7 +367,7 @@ void cmd_setmatrix(void);					/* write current matrix to the display list */
 void cmd_rotate(int32_t angle);				/* apply rotation to the current matrix */
 void cmd_translate(int32_t tx, int32_t ty);	/* apply translation to the current matrix */
 
-
+void InitBus();
 
 /* Delaying function */
 void sysDms(uint32_t millisec);

@@ -12,8 +12,6 @@
   * Copyright (c) 2014 Akos Pasztor. All rights reserved.
   ******************************************************************************
 **/
-#include "ft800.h"
-
 #include <stdlib.h>
 #include <string.h>
 
@@ -24,6 +22,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_system.h"
+#include "ft800lib.h"
 
 
 //#define TAG	"FT800"
@@ -74,22 +73,25 @@ void InitBus()
 	ret = spi_bus_add_device( HSPI_HOST, &devcfg, &handle);
 	ESP_LOGI("FT800", "spi_bus_add_device=%d",ret);
 	assert(ret==ESP_OK);
+
+	gpio_set_direction(GPIO_PD, GPIO_MODE_OUTPUT);
+	gpio_set_direction(GPIO_INT, GPIO_MODE_INPUT);
 }
 
 
 bool SPI_WRT(const uint8_t* txBuf, uint8_t* rxBuf, size_t DataLength)
 {
 	spi_transaction_t SPITransaction;
-	esp_err_t ret;
-
 	if ( DataLength > 0 )
 	{
 		memset( &SPITransaction, 0, sizeof( spi_transaction_t ) );
 		SPITransaction.length = DataLength * 8;
 		SPITransaction.tx_buffer = txBuf;
 		SPITransaction.rx_buffer = rxBuf;
-		ret = spi_device_transmit( handle, &SPITransaction );
-		assert(ret==ESP_OK);
+		ESP_ERROR_CHECK(spi_device_acquire_bus(handle, portMAX_DELAY));
+		ESP_ERROR_CHECK(spi_device_transmit( handle, &SPITransaction ));
+		spi_device_release_bus(handle);
+
 	}
 
 	return true;
@@ -103,24 +105,11 @@ bool SPI_WRT(const uint8_t* txBuf, uint8_t* rxBuf, size_t DataLength)
 /* Init function for an 5" LCD display */
 uint8_t initFT800(void)
 {
-	static bool first = true;
-	if(first)
-	{
-		InitBus();
-		first = false;
-	}
 	uint8_t dev_id = 0;                  // Variable for holding the read device id
-
-	gpio_set_direction(GPIO_PD, GPIO_MODE_OUTPUT);
-	gpio_set_direction(GPIO_INT, GPIO_MODE_INPUT);
-
-
 	gpio_set_level(GPIO_PD, 0);			// Set the PDN pin low
 	sysDms(50);                          // Delay 50 ms for stability
 	gpio_set_level(GPIO_PD, 1);			// Set the PDN pin high
 	sysDms(50);                          // Delay 50 ms for stability
-
-
 
 	//HOST_CMD_WRITE(CMD_ACTIVE);
 
@@ -129,6 +118,7 @@ uint8_t initFT800(void)
 	//Ext Clock
 	HOST_CMD_WRITE(CMD_CLKEXT);         // Send CLK_EXT Command (0x44)
 	HOST_CMD_WRITE(CMD_ACTIVE);
+
 
 	//PLL (48M) Clock
 	//HOST_CMD_WRITE(CMD_CLK48M);         // Send CLK_48M Command (0x62)
@@ -229,6 +219,7 @@ void HOST_CMD(uint32_t cmd)
 		tx[2] = 0x00;
 	}
 	SPI_WRT(tx, NULL, sizeof(tx));
+
 }
 
 void HOST_CMD_WRITE(uint8_t CMD)
