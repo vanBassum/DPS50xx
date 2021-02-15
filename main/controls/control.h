@@ -9,13 +9,14 @@
 #define MAIN_CONTROLS_CONTROL_H_
 
 #include "../../components/misc/event.h"
+#include "../../components/misc/callback.h"
 #include "../drawing/graphics.h"
 #include "../drawing/rectangle.h"
-
 
 class Control
 {
 public:
+	Callback<void> RedrawRequest;
 	Event<Control*> TouchDown;
 	Event<Control*> TouchUp;
 

@@ -46,10 +46,14 @@ void FT800::Work(void *arg)
 		{
 
 		case Notifications::Refresh:
+			cmd(CMD_DLSTART);
+			cmd(CLEAR(1,1,1));
 			controlsMutex.Take();
 			for(int i=0; i<controls.size(); i++)
 				controls[i]->Paint(this, window);
 			controlsMutex.Give();
+			cmd(DISPLAY());
+			cmd(CMD_SWAP);
 			break;
 
 		case Notifications::ScreenCalibrate:
@@ -57,12 +61,8 @@ void FT800::Work(void *arg)
 			break;
 		}
 
-
-
 		uint32_t touchReg = HOST_MEM_RD32(REG_TOUCH_DIRECT_XY);
-
 		bool touch = !(touchReg & 0x80000000);
-
 
 		if(touch)
 		{
@@ -70,8 +70,6 @@ void FT800::Work(void *arg)
 			float y = (touchReg & 0x000003FF);
 			x = x * xScale + xOffset;
 			y = y * yScale + yOffset;
-
-
 			controlsMutex.Take();
 			for(int i=controls.size() - 1; i>=0; i--)
 			{
@@ -101,12 +99,20 @@ void FT800::Work(void *arg)
 	}
 }
 
+
+
+void FT800::Refresh()
+{
+	task->Notify((uint32_t)Notifications::Refresh);
+}
+
 void FT800::AddControl(Control *ctrl)
 {
 	controlsMutex.Take();
 	controls.push_back(ctrl);
 	controlsMutex.Give();
-	task->Notify((uint32_t)Notifications::Refresh);
+	ctrl->RedrawRequest.Bind(this, &FT800::Refresh);
+	Refresh();
 }
 
 

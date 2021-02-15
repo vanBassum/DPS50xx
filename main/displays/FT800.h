@@ -19,7 +19,7 @@ class FT800 : public Graphics
 {
 	enum class Notifications
 	{
-		Refresh,
+		Refresh	= 1,
 		ScreenCalibrate,
 	};
 
@@ -45,6 +45,7 @@ public:
 	void DrawRectangle(Pen pen, Rectangle rect);
 	void DrawLine(Pen pen, int x1, int y1, int x2, int y2);
 	void AddControl(Control *ctrl);
+	void Refresh();
 
 };
 

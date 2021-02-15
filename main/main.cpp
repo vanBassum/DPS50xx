@@ -21,12 +21,12 @@ extern "C" {
 
 void Up(Control *ctrl)
 {
-
+	ESP_LOGI("main", "UP");
 }
 
 void Down(Control *ctrl)
 {
-
+	ESP_LOGI("main", "DOWN");
 }
 
 void Test()
