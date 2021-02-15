@@ -22,11 +22,10 @@ class FT800 : public Graphics
 		Refresh	= 1,
 		ScreenCalibrate,
 	};
-
 	FreeRTOS::NotifyableTask *task = NULL;
 	FreeRTOS::RecursiveMutex controlsMutex;
 	std::vector<Control*> controls;
-	int touchPollTime = 100;
+	int touchPollTime = 10;
 	Rectangle window = Rectangle(0, 0, 480, 272);
 
 	float xScale 	= 0.493033;
@@ -34,9 +33,9 @@ class FT800 : public Graphics
 	float yScale 	= -0.294811;
 	float yOffset 	= 281.521210;
 
-	void Dot(int x, int y);
-	void CaliDot(int dx, int dy, int *tx, int *ty);
-	void Calibrate();
+	//void Dot(int x, int y);
+	//void CaliDot(int dx, int dy, int *tx, int *ty);
+	//void Calibrate();
 	void Work(void *arg);
 
 public:
@@ -46,6 +45,8 @@ public:
 	void DrawLine(Pen pen, int x1, int y1, int x2, int y2);
 	void AddControl(Control *ctrl);
 	void Refresh();
+	void Begin();
+	void End();
 
 };
 

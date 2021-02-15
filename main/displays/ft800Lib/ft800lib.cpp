@@ -61,6 +61,7 @@ void InitBus()
 	buscfg.quadwp_io_num = -1;
 	buscfg.quadhd_io_num = -1;
 
+
 	devcfg.clock_speed_hz = SPI_Frequency;
 	devcfg.spics_io_num = GPIO_CS;
 	devcfg.queue_size = 7;
@@ -221,6 +222,8 @@ void HOST_CMD(uint32_t cmd)
 	SPI_WRT(tx, NULL, sizeof(tx));
 
 }
+
+
 
 void HOST_CMD_WRITE(uint8_t CMD)
 {

@@ -9,7 +9,7 @@
 
 #include "esp_log.h"
 
-
+/*
 void axb(float x1, float x2, float y1, float y2, float *scale, float *offset)
 {
 	float dy = y2 - y1;
@@ -17,12 +17,12 @@ void axb(float x1, float x2, float y1, float y2, float *scale, float *offset)
 	*scale = dy / dx;
 	*offset = y1 - *scale * x1;
 }
-
+*/
 
 FT800::FT800()
 {
 	InitBus();
-	task = new FreeRTOS::NotifyableTask("FT800", 7, 1024 * 4, this, &FT800::Work);
+	task = new FreeRTOS::NotifyableTask("FT800", 7, 1024 * 8, this, &FT800::Work);
 	task->Run(NULL);
 	//task->Notify((uint32_t)Notifications::ScreenCalibrate);
 }
@@ -46,18 +46,16 @@ void FT800::Work(void *arg)
 		{
 
 		case Notifications::Refresh:
-			cmd(CMD_DLSTART);
-			cmd(CLEAR(1,1,1));
+			Begin();
 			controlsMutex.Take();
 			for(int i=0; i<controls.size(); i++)
 				controls[i]->Paint(this, window);
 			controlsMutex.Give();
-			cmd(DISPLAY());
-			cmd(CMD_SWAP);
+			End();
 			break;
 
 		case Notifications::ScreenCalibrate:
-			Calibrate();
+			//Calibrate();
 			break;
 		}
 
@@ -100,6 +98,17 @@ void FT800::Work(void *arg)
 }
 
 
+void FT800::Begin()
+{
+	cmd(CMD_DLSTART);
+	cmd(CLEAR(1,1,1));
+}
+
+void FT800::End()
+{
+	cmd(DISPLAY());
+	cmd(CMD_SWAP);
+}
 
 void FT800::Refresh()
 {
@@ -115,7 +124,7 @@ void FT800::AddControl(Control *ctrl)
 	Refresh();
 }
 
-
+/*
 void FT800::CaliDot(int dx, int dy, int *tx, int *ty)
 {
 	uint32_t tag = -1;
@@ -175,7 +184,7 @@ void FT800::Dot(int x, int y)
 	cmd(VERTEX2F(x * 16, y * 16));
 	cmd(END());
 }
-
+*/
 void FT800::DrawLine(Pen pen, int x1, int y1, int x2, int y2)
 {
 	cmd(COLOR_RGB(pen.color.R, pen.color.G, pen.color.B));

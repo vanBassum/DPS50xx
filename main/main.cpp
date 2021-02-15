@@ -33,12 +33,32 @@ void Test()
 {
 	FT800 ft800;
 
-	Button btn;
 
-	ft800.AddControl(&btn);
 
-	btn.TouchDown.Bind(Down);
-	btn.TouchUp.Bind(Up);
+	int x = 0;
+	int y = 0;
+
+
+	int xNum = 4;
+	int yNum = 4;
+
+	//480, 272
+
+
+	for(x = 0; x < xNum; x++)
+	{
+		for(y = 0; y < yNum; y++)
+		{
+			Button *btn = new Button();
+			btn->Width = (480 / xNum - 10);
+			btn->Height = (272 / yNum - 10);
+
+			btn->X = x * (480 / xNum) + 5;
+			btn->Y = y * (272 / yNum) + 5;
+
+			ft800.AddControl(btn);
+		}
+	}
 
 	while(1)
 		vTaskDelay(30000 / portTICK_PERIOD_MS);

@@ -17,8 +17,8 @@ public:
 
 	virtual ~Graphics(){};
 	virtual void DrawRectangle(Pen pen, Rectangle rect) = 0;
-
-
+	virtual void Begin() = 0;
+	virtual void End() = 0;
 
 };
 
