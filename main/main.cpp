@@ -8,60 +8,146 @@
 #include "nvs_flash.h"
 #include "lwip/apps/sntp.h"
 #include "lwip/apps/sntp_opts.h"
+#include "driver/gpio.h"
+
 #include <string.h>
 
-#include "displays/FT800.h"
-#include "controls/button.h"
-
+#include "DPS5020.h"
+#include "esplib/onewire/onewire.h"
+#include "esplib/misc/property.h"
+#include "esplib/openapi/openapi.h"
 
 extern "C" {
    void app_main();
 }
 
 
-void Up(Control *ctrl)
+class Status : public PropertyContainer
 {
-	ESP_LOGI("main", "UP");
+public:
+	Prop<float> USet = Prop<float>(this, "USet");
+	Prop<float> ISet = Prop<float>(this, "ISet");
+	Prop<float> UOut = Prop<float>(this, "UOut");
+	Prop<float> IOut = Prop<float>(this, "IOut");
+	Prop<float> Temp = Prop<float>(this, "Temp");
+};
+
+
+class Settings : public PropertyContainer
+{
+public:
+	Prop<float> Resistance = Prop<float>(this, "Resistance");
+	Prop<int> Protection = Prop<int>(this, "Protection");
+	Prop<int> ThresholdVoltage = Prop<int>(this, "ThresholdVoltage");
+
+	void Copy(Settings s)
+	{
+		Resistance.Set(s.Resistance.Get());
+		Protection.Set(s.Protection.Get());
+		ThresholdVoltage.Set(s.ThresholdVoltage.Get());
+	}
+};
+
+
+Settings settings;
+Status status;
+DPS5020 dps;
+
+
+Status GetStatus()
+{
+	return status;
 }
 
-void Down(Control *ctrl)
+Settings GetSettings()
 {
-	ESP_LOGI("main", "DOWN");
+	return settings;
 }
+
+bool SetSettings(Settings s)
+{
+	settings.Copy(s);
+	return true;
+}
+
+void IOutChanged(Modbus::Property *prop)
+{
+	float val = prop->Get() / 100;
+	status.IOut.Set(val);
+}
+
+void UOutChanged(Modbus::Property *prop)
+{
+	float val = prop->Get() / 10;
+	status.UOut.Set(val);
+
+	if(settings.Protection.Get())
+	{
+		float voltageDrop = settings.Resistance.Get() * status.IOut.Get();
+		float anodeVoltage = voltageDrop + status.UOut.Get();
+		if(anodeVoltage > settings.ThresholdVoltage.Get())
+		{
+			if(status.IOut.Get() > 1)
+				dps.IOut.Set(status.IOut.Get() - 1);
+			else
+				dps.UOut.Set(10);
+		}
+	}
+}
+
+void ISetChanged(Modbus::Property *prop)
+{
+	float val = prop->Get() / 100;
+	status.ISet.Set(val);
+}
+
+void USetChanged(Modbus::Property *prop)
+{
+	float val = prop->Get() / 10;
+	status.USet.Set(val);
+}
+
+void TChanged(float val)
+{
+	status.Temp.Set(val);
+}
+
 
 void Test()
 {
-	FT800 ft800;
+	Swagger::OpenAPI api;
+
+	api.RegisterGetFunction("/Status", &GetStatus);
+	api.RegisterGetFunction("/Settings", &GetSettings);
+	api.RegisterPostFunction("/Settings", &SetSettings);
+
+	api.GenerateSwaggerJSON();
+
+	dps.UOut.OnChange.Bind(UOutChanged);
+	dps.IOut.OnChange.Bind(IOutChanged);
+	dps.USet.OnChange.Bind(USetChanged);
+	dps.ISet.OnChange.Bind(ISetChanged);
 
 
-
-	int x = 0;
-	int y = 0;
-
-
-	int xNum = 4;
-	int yNum = 4;
-
-	//480, 272
+	OneWire::Bus onewire(GPIO_NUM_4);
+	OneWire::DS18B20 *tempSensors[10];
 
 
-	for(x = 0; x < xNum; x++)
-	{
-		for(y = 0; y < yNum; y++)
-		{
-			Button *btn = new Button();
-			btn->Width = (480 / xNum - 10);
-			btn->Height = (272 / yNum - 10);
-
-			btn->X = x * (480 / xNum) + 5;
-			btn->Y = y * (272 / yNum) + 5;
-
-			ft800.AddControl(btn);
-		}
-	}
-
+	int devCnt = onewire.Search((OneWire::Device **)tempSensors, 10, OneWire::Devices::DS18B20);
+	double pTemp = 0;
 	while(1)
-		vTaskDelay(30000 / portTICK_PERIOD_MS);
+	{
+		if(devCnt >= 1)
+		{
+			float t = tempSensors[0]->GetTemp();
+			if(pTemp != t)
+			{
+				TChanged(t);
+				pTemp = t;
+			}
+		}
+		vTaskDelay(5000 / portTICK_PERIOD_MS);
+	}
 }
 
 
@@ -79,9 +165,6 @@ esp_err_t event_handler(void *ctx, system_event_t *event)
 
     return ESP_OK;
 }
-
-
-
 
 
 
