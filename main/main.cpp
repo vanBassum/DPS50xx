@@ -38,6 +38,17 @@ public:
 	}
 };
 
+class Control : public PropertyContainer
+{
+public:
+	Prop<float> USet = Prop<float>(this, "USet");
+	Prop<float> ISet = Prop<float>(this, "ISet");
+
+	std::string GetName() override
+	{
+		return "Control";
+	}
+};
 
 class Settings : public PropertyContainer
 {
@@ -45,13 +56,27 @@ public:
 	Prop<float> Resistance 			= Prop<float>(this, "Resistance", 0);
 	Prop<int> Protection 			= Prop<int>(this, "Protection", 0);
 	Prop<int> ThresholdVoltage 		= Prop<int>(this, "ThresholdVoltage", 5);
-	Prop<int> ShutdownVoltage 		= Prop<int>(this, "ShutdownVoltage", 6);
+	Prop<float> SaveVoltage 		= Prop<float>(this, "SaveVoltage", 4);
+	Prop<float> SaveCurrent 		= Prop<float>(this, "SaveCurrent", 0.1);
 
-	void Copy(Settings s)
+	bool VerifyCopy(Settings s)
 	{
 		Resistance.Set(s.Resistance.Get());
 		Protection.Set(s.Protection.Get());
 		ThresholdVoltage.Set(s.ThresholdVoltage.Get());
+		SaveCurrent.Set(s.SaveCurrent.Get());
+
+		if(s.SaveVoltage.Get() < s.ThresholdVoltage.Get())
+		{
+			SaveVoltage.Set(s.SaveVoltage.Get());
+			return true;
+		}
+		else
+		{
+			SaveVoltage.Set(s.ThresholdVoltage.Get() - s.ThresholdVoltage.Get() /10);
+		}
+
+		return false;
 	}
 
 	std::string GetName() override
@@ -63,7 +88,7 @@ public:
 
 Settings settings;
 Status status;
-
+DPS5020 dps;
 
 
 Status GetStatus()
@@ -78,35 +103,47 @@ Settings GetSettings()
 
 bool SetSettings(Settings s)
 {
-	settings.Copy(s);
+	return settings.VerifyCopy(s);
+}
+
+bool SetControl(Control s)
+{
+	dps.USet.Set(s.USet.Get() * 100);
+	dps.ISet.Set(s.ISet.Get() * 100);
 	return true;
 }
 
-void IOutChanged(Modbus::Property *prop)
-{
-	float val = prop->Get() / 100;
-	status.IOut.Set(val);
-}
 
-void UOutChanged(Modbus::Property *prop)
+void CalcUAnode()
 {
-	float val = prop->Get() / 100;
-	status.UOut.Set(val);
-
 	float voltageDrop = settings.Resistance.Get() * status.IOut.Get();
 	status.UAnode.Set(voltageDrop + status.UOut.Get());
 }
 
-void ISetChanged(Modbus::Property *prop)
+void UOutChanged(Modbus::Property *prop)
 {
-	float val = prop->Get() / 100;
-	status.ISet.Set(val);
+	float val = prop->Get();
+	status.UOut.Set(val / 100);
+	CalcUAnode();
+}
+
+void IOutChanged(Modbus::Property *prop)
+{
+	float val = prop->Get();
+	status.IOut.Set(val / 100);
+	CalcUAnode();
 }
 
 void USetChanged(Modbus::Property *prop)
 {
-	float val = prop->Get() / 100;
-	status.USet.Set(val);
+	float val = prop->Get();
+	status.USet.Set(val / 100);
+}
+
+void ISetChanged(Modbus::Property *prop)
+{
+	float val = prop->Get();
+	status.ISet.Set(val / 100);
 }
 
 void TChanged(float val)
@@ -117,13 +154,13 @@ void TChanged(float val)
 
 void Test()
 {
-	DPS5020 dps;
+
 	Swagger::OpenAPI api;
 
 	api.RegisterGetFunction("/Status", &GetStatus);
 	api.RegisterGetFunction("/Settings", &GetSettings);
 	api.RegisterPostFunction("/Settings", &SetSettings);
-
+	api.RegisterPostFunction("/Control", &SetControl);
 	api.GenerateSwaggerJSON();
 
 	dps.UOut.OnChange.Bind(UOutChanged);
@@ -152,23 +189,26 @@ void Test()
 
 		if(settings.Protection.Get())
 		{
-			if(status.UAnode.Get() > settings.ShutdownVoltage.Get())
-			{
-				dps.Power.Set(0);
-			}
-			else if(status.UAnode.Get() > settings.ThresholdVoltage.Get())
-			{
-				//First lower the current.
-				//Second lower the voltage.
-				//If nothing helps, cut the power.
+			float uOut = status.UOut.Get();
+			float uAnode = status.UAnode.Get();
+			float uAnodeMax = settings.ThresholdVoltage.Get();
+			float iOut = status.IOut.Get();
 
+			if(uAnode > uAnodeMax)
+			{
 
-				if(status.IOut.Get() > 1)
-					dps.ISet.Set((status.IOut.Get() - 1) / 100);
-				else if(status.UOut.Get() > 1)
-					dps.UOut.Set((status.UOut.Get() - 1) / 100);
+				if(uOut > 1)
+				{
+					float uExceeded = uAnodeMax - uAnode;
+					ESP_LOGI("Main", "Max anode voltage exceeded (%.2f > %.2f). lowering voltage by %.2fV percent to prevent anode damage. ", uAnode, uAnodeMax, uExceeded);
+					dps.USet.Set((uOut - (uOut/10)) * 100);
+				}
 				else
-					dps.Power.Set(0);
+				{
+					ESP_LOGI("Main", "Max anode voltage exceeded (%.2f > %.2f. lowering to safetylevels.", uAnode, uAnodeMax);
+					dps.USet.Set(settings.SaveVoltage.Get() * 100);
+					dps.ISet.Set(settings.SaveCurrent.Get() * 100);
+				}
 			}
 		}
 
