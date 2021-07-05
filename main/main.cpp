@@ -29,16 +29,23 @@ public:
 	Prop<float> ISet = Prop<float>(this, "ISet");
 	Prop<float> UOut = Prop<float>(this, "UOut");
 	Prop<float> IOut = Prop<float>(this, "IOut");
+	Prop<float> UAnode = Prop<float>(this, "UAnode");
 	Prop<float> Temp = Prop<float>(this, "Temp");
+
+	std::string GetName() override
+	{
+		return "Status";
+	}
 };
 
 
 class Settings : public PropertyContainer
 {
 public:
-	Prop<float> Resistance = Prop<float>(this, "Resistance");
-	Prop<int> Protection = Prop<int>(this, "Protection");
-	Prop<int> ThresholdVoltage = Prop<int>(this, "ThresholdVoltage");
+	Prop<float> Resistance 			= Prop<float>(this, "Resistance", 0);
+	Prop<int> Protection 			= Prop<int>(this, "Protection", 0);
+	Prop<int> ThresholdVoltage 		= Prop<int>(this, "ThresholdVoltage", 5);
+	Prop<int> ShutdownVoltage 		= Prop<int>(this, "ShutdownVoltage", 6);
 
 	void Copy(Settings s)
 	{
@@ -46,12 +53,17 @@ public:
 		Protection.Set(s.Protection.Get());
 		ThresholdVoltage.Set(s.ThresholdVoltage.Get());
 	}
+
+	std::string GetName() override
+	{
+		return "Settings";
+	}
 };
 
 
 Settings settings;
 Status status;
-DPS5020 dps;
+
 
 
 Status GetStatus()
@@ -78,21 +90,11 @@ void IOutChanged(Modbus::Property *prop)
 
 void UOutChanged(Modbus::Property *prop)
 {
-	float val = prop->Get() / 10;
+	float val = prop->Get() / 100;
 	status.UOut.Set(val);
 
-	if(settings.Protection.Get())
-	{
-		float voltageDrop = settings.Resistance.Get() * status.IOut.Get();
-		float anodeVoltage = voltageDrop + status.UOut.Get();
-		if(anodeVoltage > settings.ThresholdVoltage.Get())
-		{
-			if(status.IOut.Get() > 1)
-				dps.IOut.Set(status.IOut.Get() - 1);
-			else
-				dps.UOut.Set(10);
-		}
-	}
+	float voltageDrop = settings.Resistance.Get() * status.IOut.Get();
+	status.UAnode.Set(voltageDrop + status.UOut.Get());
 }
 
 void ISetChanged(Modbus::Property *prop)
@@ -103,7 +105,7 @@ void ISetChanged(Modbus::Property *prop)
 
 void USetChanged(Modbus::Property *prop)
 {
-	float val = prop->Get() / 10;
+	float val = prop->Get() / 100;
 	status.USet.Set(val);
 }
 
@@ -115,6 +117,7 @@ void TChanged(float val)
 
 void Test()
 {
+	DPS5020 dps;
 	Swagger::OpenAPI api;
 
 	api.RegisterGetFunction("/Status", &GetStatus);
@@ -146,6 +149,29 @@ void Test()
 				pTemp = t;
 			}
 		}
+
+		if(settings.Protection.Get())
+		{
+			if(status.UAnode.Get() > settings.ShutdownVoltage.Get())
+			{
+				dps.Power.Set(0);
+			}
+			else if(status.UAnode.Get() > settings.ThresholdVoltage.Get())
+			{
+				//First lower the current.
+				//Second lower the voltage.
+				//If nothing helps, cut the power.
+
+
+				if(status.IOut.Get() > 1)
+					dps.ISet.Set((status.IOut.Get() - 1) / 100);
+				else if(status.UOut.Get() > 1)
+					dps.UOut.Set((status.UOut.Get() - 1) / 100);
+				else
+					dps.Power.Set(0);
+			}
+		}
+
 		vTaskDelay(5000 / portTICK_PERIOD_MS);
 	}
 }
