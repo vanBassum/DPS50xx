@@ -16,6 +16,7 @@
 #include "esplib/onewire/onewire.h"
 #include "esplib/misc/property.h"
 #include "esplib/openapi/openapi.h"
+#include "nvs.h"
 
 extern "C" {
    void app_main();
@@ -61,6 +62,7 @@ public:
 
 	bool VerifyCopy(Settings s)
 	{
+		bool result = false;
 		Resistance.Set(s.Resistance.Get());
 		Protection.Set(s.Protection.Get());
 		ThresholdVoltage.Set(s.ThresholdVoltage.Get());
@@ -69,14 +71,13 @@ public:
 		if(s.SaveVoltage.Get() < s.ThresholdVoltage.Get())
 		{
 			SaveVoltage.Set(s.SaveVoltage.Get());
-			return true;
+			result = true;
 		}
 		else
 		{
 			SaveVoltage.Set(s.ThresholdVoltage.Get() - s.ThresholdVoltage.Get() /10);
 		}
-
-		return false;
+		return result;
 	}
 
 	std::string GetName() override
@@ -103,7 +104,12 @@ Settings GetSettings()
 
 bool SetSettings(Settings s)
 {
-	return settings.VerifyCopy(s);
+	bool result = settings.VerifyCopy(s);
+	if(result)
+	{
+		settings.SaveToNVS("nvs", "settings");
+	}
+	return result;
 }
 
 bool SetControl(Control s)
@@ -154,6 +160,8 @@ void TChanged(float val)
 
 void Test()
 {
+	settings.LoadFromNVS("nvs", "settings");
+
 
 	Swagger::OpenAPI api;
 
