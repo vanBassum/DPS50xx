@@ -15,6 +15,7 @@ public:
 
 private:
     static uint16_t CalculateCRC(const uint8_t *buf, int len);
+    bool ReadExact(uint8_t *buf, int count, TickType_t timeout);
 
     uart_port_t port_ = UART_NUM_1;
     uint8_t rxBuffer_[256];

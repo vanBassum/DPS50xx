@@ -55,6 +55,29 @@ void ModbusRtuClient::Init(int txPin, int rxPin, uint32_t baud, uart_port_t port
 }
 
 // -------------------------
+// ReadExact: read exactly `count` bytes, retrying until timeout
+// -------------------------
+bool ModbusRtuClient::ReadExact(uint8_t *buf, int count, TickType_t timeout)
+{
+    int total = 0;
+    TickType_t start = xTaskGetTickCount();
+
+    while (total < count)
+    {
+        TickType_t elapsed = xTaskGetTickCount() - start;
+        if (elapsed >= timeout)
+            return false;
+
+        TickType_t remaining = timeout - elapsed;
+        int n = uart_read_bytes(port_, buf + total, count - total, remaining);
+        if (n <= 0)
+            return false;
+        total += n;
+    }
+    return true;
+}
+
+// -------------------------
 // Helpers
 // -------------------------
 static ModbusError MapExceptionCode(uint8_t ex)
@@ -76,6 +99,7 @@ static ModbusError MapExceptionCode(uint8_t ex)
 
 // -------------------------
 // Execute: send request, receive response via UART
+// Uses deterministic frame-size detection instead of inter-character timeout
 // -------------------------
 ModbusError ModbusRtuClient::Execute(uint8_t unitId,
                                      const ModbusPdu &request,
@@ -106,35 +130,71 @@ ModbusError ModbusRtuClient::Execute(uint8_t unitId,
     uart_wait_tx_done(port_, pdMS_TO_TICKS(100));
 
     // -------------------------
-    // Read response using inter-character timeout
-    // Standard Modbus RTU: frame ends after 3.5 character silence
-    // At 9600 baud: ~4ms, we use 10ms for safety
+    // Read response using deterministic frame-size detection
+    // Step 1: Read unitId + function code (2 bytes)
+    // Step 2: Determine expected frame size from function code
+    // Step 3: Read remaining bytes
     // -------------------------
+    TickType_t rxTimeout = pdMS_TO_TICKS(timeoutMs);
     int rxPtr = 0;
-    const TickType_t interCharTimeout = pdMS_TO_TICKS(10);
 
-    // Wait for first byte with full timeout
-    int n = uart_read_bytes(port_, &rxBuffer_[0], 1, pdMS_TO_TICKS(timeoutMs));
-    if (n != 1)
+    // Read unitId + function (2 bytes)
+    if (!ReadExact(rxBuffer_, 2, rxTimeout))
         return ModbusError::Timeout;
-    rxPtr = 1;
+    rxPtr = 2;
 
-    // Read remaining bytes until inter-character timeout (frame complete)
-    while (rxPtr < (int)sizeof(rxBuffer_))
+    uint8_t func = rxBuffer_[1];
+    int frameSize;
+
+    if (func & 0x80)
     {
-        n = uart_read_bytes(port_, &rxBuffer_[rxPtr], 1, interCharTimeout);
-        if (n != 1)
-            break;
-        rxPtr++;
+        // Exception response: [unitId][func|0x80][exCode][CRC_lo][CRC_hi] = 5
+        frameSize = 5;
+    }
+    else
+    {
+        switch (func)
+        {
+            case 0x01: // Read Coils
+            case 0x02: // Read Discrete Inputs
+            case 0x03: // Read Holding Registers
+            case 0x04: // Read Input Registers
+                // Variable length: need byteCount to determine frame size
+                if (!ReadExact(rxBuffer_ + 2, 1, rxTimeout))
+                    return ModbusError::Timeout;
+                rxPtr = 3;
+                // Total: unitId + func + byteCount + data[byteCount] + CRC(2)
+                frameSize = 3 + rxBuffer_[2] + 2;
+                break;
+
+            case 0x05: // Write Single Coil
+            case 0x06: // Write Single Register
+            case 0x0F: // Write Multiple Coils
+            case 0x10: // Write Multiple Registers
+                // Fixed echo: [unitId][func][addr_hi][addr_lo][val_hi][val_lo][CRC_lo][CRC_hi] = 8
+                frameSize = 8;
+                break;
+
+            default:
+                ESP_LOGW(TAG, "Unknown function 0x%02X in response", func);
+                return ModbusError::InvalidReplyFunctionCode;
+        }
     }
 
-    // -------------------------
-    // Validate minimum reply length
-    // -------------------------
-    if (rxPtr < 5)
+    // Sanity check
+    if (frameSize > (int)sizeof(rxBuffer_))
+        return ModbusError::InsufficientRxBufferSize;
+
+    // Read remaining bytes
+    int remaining = frameSize - rxPtr;
+    if (remaining > 0)
     {
-        ESP_LOGW(TAG, "Short frame: %d bytes", rxPtr);
-        return ModbusError::InvalidReplyLength;
+        if (!ReadExact(rxBuffer_ + rxPtr, remaining, rxTimeout))
+        {
+            ESP_LOGW(TAG, "Incomplete frame: got %d/%d bytes", rxPtr, frameSize);
+            return ModbusError::Timeout;
+        }
+        rxPtr += remaining;
     }
 
     // -------------------------
@@ -144,7 +204,7 @@ ModbusError ModbusRtuClient::Execute(uint8_t unitId,
     uint16_t crcCheck = CalculateCRC(rxBuffer_, rxPtr - 2);
     if (recvCrc != crcCheck)
     {
-        ESP_LOGW(TAG, "CRC mismatch: recv=0x%04X calc=0x%04X", recvCrc, crcCheck);
+        ESP_LOGW(TAG, "CRC mismatch: recv=0x%04X calc=0x%04X (%d bytes)", recvCrc, crcCheck, rxPtr);
         return ModbusError::InvalidCRC;
     }
 
@@ -155,16 +215,10 @@ ModbusError ModbusRtuClient::Execute(uint8_t unitId,
         return ModbusError::InvalidDeviceReply_UnitId;
 
     // -------------------------
-    // Function / exception handling
+    // Exception handling
     // -------------------------
-    uint8_t func = rxBuffer_[1];
-
-    // Exception response: [unit][func|0x80][ex][CRClo][CRChi]
     if (func & 0x80)
     {
-        if (rxPtr != 5)
-            return ModbusError::InvalidDeviceReply_ReplyLength;
-
         uint8_t exceptionCode = rxBuffer_[2];
         return MapExceptionCode(exceptionCode);
     }
@@ -173,23 +227,10 @@ ModbusError ModbusRtuClient::Execute(uint8_t unitId,
         return ModbusError::InvalidReplyFunctionCode;
 
     // -------------------------
-    // Deserialize PDU (skip unitId byte, exclude CRC)
+    // Deserialize PDU (skip unitId, exclude CRC)
     // -------------------------
     size_t pduLen = (size_t)rxPtr - 3; // remove unitId (1) + CRC (2)
     response = ModbusPdu::Deserialize(&rxBuffer_[1], pduLen);
-
-    // Sanity-check read response lengths
-    if ((func == 0x03 || func == 0x04))
-    {
-        uint8_t byteCount = rxBuffer_[2];
-        if (rxPtr != (int)(3 + byteCount + 2))
-            return ModbusError::InvalidReplyLength;
-    }
-    else if (func == 0x06 || func == 0x10)
-    {
-        if (rxPtr != 8)
-            return ModbusError::InvalidReplyLength;
-    }
 
     return ModbusError::NoError;
 }
