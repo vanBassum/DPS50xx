@@ -53,7 +53,7 @@ class DPS5020
 {
     inline constexpr static const char* TAG = "DPS5020";
     static constexpr int TIMEOUT_MS = 500;
-    static constexpr int MAX_RETRIES = 3;
+    static constexpr int MAX_RETRIES = 1;
     static constexpr int OFFLINE_THRESHOLD = 3; // consecutive failures before going offline
 
 public:
