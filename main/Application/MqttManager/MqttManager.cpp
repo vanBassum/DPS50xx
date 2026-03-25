@@ -1,8 +1,6 @@
 #include "MqttManager.h"
 #include "DeviceManager.h"
 #include "SettingsManager.h"
-#include "JsonWriter.h"
-#include "BufferStream.h"
 #include "DPS5020.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -206,30 +204,36 @@ void MqttManager::PublishLoop()
     }
 }
 
+void MqttManager::PublishValue(const char *suffix, const char *value)
+{
+    char topic[96];
+    BuildTopic(topic, sizeof(topic), suffix);
+    esp_mqtt_client_publish(client_, topic, value, (int)strlen(value), 0, 1);
+}
+
+void MqttManager::PublishFloat(const char *suffix, float value)
+{
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%.2f", value);
+    PublishValue(suffix, buf);
+}
+
 void MqttManager::PublishState()
 {
     auto &dps = serviceProvider_.getDeviceManager().getDPS5020();
     const auto &d = dps.GetData();
 
-    char buf[512];
-    BufferStream stream(buf, sizeof(buf));
-    JsonWriter json(stream);
-
-    json.beginObject();
-    json.field("online", dps.IsOnline());
-    json.field("setVoltage", d.setVoltage);
-    json.field("setCurrent", d.setCurrent);
-    json.field("outVoltage", d.outVoltage);
-    json.field("outCurrent", d.outCurrent);
-    json.field("outPower", d.outPower);
-    json.field("inVoltage", d.inVoltage);
-    json.field("outputOn", d.outputOn);
-    json.field("protection", static_cast<int32_t>(d.protection));
-    json.field("cvcc", d.constantCurrent ? "CC" : "CV");
-    json.field("keyLock", d.keyLock);
-    json.endObject();
-
-    char topic[96];
-    BuildTopic(topic, sizeof(topic), "state");
-    esp_mqtt_client_publish(client_, topic, buf, (int)stream.length(), 0, 1);
+    PublishValue("online", dps.IsOnline() ? "true" : "false");
+    PublishFloat("setVoltage", d.setVoltage);
+    PublishFloat("setCurrent", d.setCurrent);
+    PublishFloat("outVoltage", d.outVoltage);
+    PublishFloat("outCurrent", d.outCurrent);
+    PublishFloat("outPower", d.outPower);
+    PublishFloat("inVoltage", d.inVoltage);
+    PublishValue("outputOn", d.outputOn ? "on" : "off");
+    PublishValue("protection", PROTECTION_LABELS[static_cast<int>(d.protection) & 3]);
+    PublishValue("cvcc", d.constantCurrent ? "CC" : "CV");
+    PublishValue("keyLock", d.keyLock ? "on" : "off");
 }
+
+const char *const MqttManager::PROTECTION_LABELS[] = {"none", "OVP", "OCP", "OPP"};

@@ -34,11 +34,15 @@ private:
     void StartClient();
     void PublishLoop();
     void PublishState();
+    void PublishValue(const char *suffix, const char *value);
+    void PublishFloat(const char *suffix, float value);
     void Subscribe();
     void HandleCommand(const char *topic, const char *data, int dataLen);
 
     // Build full topic: "{prefix}/{suffix}"
     int BuildTopic(char *buf, size_t bufSize, const char *suffix) const;
+
+    static const char *const PROTECTION_LABELS[];
 
     static void EventHandlerStatic(void *arg, esp_event_base_t base, int32_t id, void *data);
     void HandleEvent(esp_mqtt_event_handle_t event);
