@@ -1,3 +1,0 @@
-[submodule "main/esplib"]
-	path = main/esplib
-	url = https://github.com/vanBassum/ESP_Components.git
