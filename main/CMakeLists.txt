@@ -10,6 +10,7 @@ set(SOURCE_FILES_LIST
     "Application/CommandManager/CommandManager.cpp"
     "Application/DeviceManager/DeviceManager.cpp"
     "Application/DeviceManager/DPS5020.cpp"
+    "Application/MqttManager/MqttManager.cpp"
     "Application/UpdateManager/UpdateManager.cpp"
     "Application/SettingsManager/SettingsManager.cpp"
     "Application/LogManager/LogManager.cpp"
@@ -28,6 +29,7 @@ set(INCLUDE_DIRS_LIST
     "Application/WebServerManager"
     "Application/CommandManager"
     "Application/DeviceManager"
+    "Application/MqttManager"
     "Application/UpdateManager"
     "Application/SettingsManager"
     "Application/LogManager"
@@ -55,6 +57,7 @@ set(COMPONENT_REQUIRES
     esp_driver_i2c
     esp_driver_gpio
     esp_driver_uart
+    esp_mqtt
     mdns
 )
 

@@ -3,6 +3,7 @@
 #include "CommandManager/CommandManager.h"
 #include "DeviceManager/DeviceManager.h"
 #include "LogManager/LogManager.h"
+#include "MqttManager/MqttManager.h"
 #include "NetworkManager/NetworkManager.h"
 #include "SettingsManager/SettingsManager.h"
 #include "TimeManager/TimeManager.h"
@@ -20,6 +21,7 @@ public:
     CommandManager& getCommandManager() override { return m_commandManager; }
     DeviceManager& getDeviceManager() override { return m_deviceManager; }
     LogManager& getLogManager() override { return m_logManager; }
+    MqttManager& getMqttManager() override { return m_mqttManager; }
     NetworkManager& getNetworkManager() override { return m_networkManager; }
     SettingsManager& getSettingsManager() override { return m_settingsManager; }
     TimeManager& getTimeManager() override { return m_timeManager; }
@@ -33,6 +35,7 @@ private:
     TimeManager m_timeManager{*this};
     CommandManager m_commandManager{*this};
     DeviceManager m_deviceManager{*this};
+    MqttManager m_mqttManager{*this};
     UpdateManager m_updateManager{*this};
     WebServerManager m_webServerManager{*this};
 };

@@ -75,12 +75,13 @@ export function AppSidebar({ currentPage, onNavigate }: AppSidebarProps) {
         </SidebarGroup>
       </SidebarContent>
       <SidebarFooter className="p-3">
-        <div className="rounded-lg border bg-card p-3 text-xs">
+        <div className="rounded-lg border bg-card p-3 text-xs space-y-1.5">
           {info && (
-            <div className="mb-1.5 flex items-center justify-between">
-              <span className="text-muted-foreground">Version</span>
-              <span className="font-mono">{info.firmware}</span>
-            </div>
+            <>
+              <FooterRow label="Firmware" value={info.firmware} mono />
+              <FooterRow label="ESP-IDF" value={info.idf} mono />
+              <FooterRow label="Chip" value={info.chip} mono />
+            </>
           )}
           <div className="flex items-center justify-between">
             <span className="text-muted-foreground">Status</span>
@@ -92,5 +93,14 @@ export function AppSidebar({ currentPage, onNavigate }: AppSidebarProps) {
         </div>
       </SidebarFooter>
     </Sidebar>
+  )
+}
+
+function FooterRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div className="flex items-center justify-between">
+      <span className="text-muted-foreground">{label}</span>
+      <span className={mono ? "font-mono" : ""}>{value}</span>
+    </div>
   )
 }

@@ -1,9 +1,8 @@
 import { useState } from "react"
 import { useDPS5020, PROTECTION_LABELS, type HistoryPoint } from "@/hooks/use-dps5020"
-import { useDeviceInfo } from "@/hooks/use-device-info"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { PowerIcon, ZapIcon, LockIcon, UnlockIcon, CpuIcon } from "lucide-react"
+import { PowerIcon, ZapIcon, LockIcon, UnlockIcon } from "lucide-react"
 import {
   LineChart,
   Line,
@@ -16,14 +15,8 @@ import {
   Legend,
 } from "recharts"
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  return `${(bytes / 1024).toFixed(1)} KB`
-}
-
 export default function HomePage() {
   const { data, history, setVoltage, setCurrent, setOutput, setKeyLock } = useDPS5020()
-  const info = useDeviceInfo()
 
   return (
     <div className="space-y-6">
@@ -135,21 +128,6 @@ export default function HomePage() {
               </div>
             </div>
 
-            {/* Device info */}
-            {info && (
-              <div className="rounded-xl border bg-card p-6 text-card-foreground shadow-sm">
-                <div className="mb-3 flex items-center gap-2">
-                  <CpuIcon className="size-4 text-muted-foreground" />
-                  <h2 className="text-sm font-semibold">Device</h2>
-                </div>
-                <div className="grid grid-cols-2 gap-x-8 gap-y-1.5 text-xs">
-                  <InfoRow label="Firmware" value={info.firmware} />
-                  <InfoRow label="ESP-IDF" value={info.idf} />
-                  <InfoRow label="Chip" value={info.chip} />
-                  <InfoRow label="Free heap" value={formatBytes(info.heapFree)} />
-                </div>
-              </div>
-            )}
           </div>
 
           {/* Right column: charts */}
@@ -403,11 +381,3 @@ function Divider() {
   return <div className="h-8 w-px bg-border" />
 }
 
-function InfoRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex justify-between">
-      <span className="text-muted-foreground">{label}</span>
-      <span className="font-mono">{value}</span>
-    </div>
-  )
-}
