@@ -11,8 +11,8 @@ permissions:
 
 env:
   IDF_VERSION: "v6.0"
-  IDF_TARGET: "esp32"
-  PROJECT_NAME: "Thermy"
+  IDF_TARGET: "esp32c3"
+  PROJECT_NAME: "DPS50xx"
 
 jobs:
   build-and-release:
