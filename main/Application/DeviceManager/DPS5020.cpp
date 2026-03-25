@@ -21,7 +21,7 @@ ModbusError DPS5020::Poll()
         if (err == ModbusError::NoError)
             break;
 
-        ESP_LOGD(TAG, "Attempt %d/%d failed: %s", attempt + 1, MAX_RETRIES, ModbusErrorToString(err));
+        ESP_LOGW(TAG, "Attempt %d/%d failed: %s", attempt + 1, MAX_RETRIES, ModbusErrorToString(err));
         vTaskDelay(pdMS_TO_TICKS(50));
     }
 
