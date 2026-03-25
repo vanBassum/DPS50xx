@@ -124,25 +124,36 @@ ModbusError ModbusRtuClient::Execute(uint8_t unitId,
 
     // -------------------------
     // Flush RX, send frame, wait for TX complete
-    // Turnaround delay gives the slave time to switch to transmit mode
     // -------------------------
+    size_t buffered = 0;
+    uart_get_buffered_data_len(port_, &buffered);
+    if (buffered > 0)
+        ESP_LOGW(TAG, "RX buffer had %d stale bytes before flush", (int)buffered);
+
     uart_flush_input(port_);
     uart_write_bytes(port_, txFrame, wrPtr);
     uart_wait_tx_done(port_, pdMS_TO_TICKS(100));
-    vTaskDelay(pdMS_TO_TICKS(5));
+
+    // Check if TX echoed back (wiring issue: TX/RX shorted or half-duplex bus)
+    uart_get_buffered_data_len(port_, &buffered);
+    if (buffered > 0)
+    {
+        ESP_LOGW(TAG, "TX echo detected: %d bytes in RX after send (expected 0). Check wiring!", (int)buffered);
+        uart_flush_input(port_);
+    }
 
     // -------------------------
     // Read response using deterministic frame-size detection
-    // Step 1: Read unitId + function code (2 bytes)
-    // Step 2: Determine expected frame size from function code
-    // Step 3: Read remaining bytes
     // -------------------------
     TickType_t rxTimeout = pdMS_TO_TICKS(timeoutMs);
     int rxPtr = 0;
 
     // Read unitId + function (2 bytes)
     if (!ReadExact(rxBuffer_, 2, rxTimeout))
+    {
+        ESP_LOGW(TAG, "Timeout waiting for response header (0/%d bytes after %dms)", 2, timeoutMs);
         return ModbusError::Timeout;
+    }
     rxPtr = 2;
 
     uint8_t func = rxBuffer_[1];
@@ -206,7 +217,11 @@ ModbusError ModbusRtuClient::Execute(uint8_t unitId,
     uint16_t crcCheck = CalculateCRC(rxBuffer_, rxPtr - 2);
     if (recvCrc != crcCheck)
     {
-        ESP_LOGW(TAG, "CRC mismatch: recv=0x%04X calc=0x%04X (%d bytes)", recvCrc, crcCheck, rxPtr);
+        char hex[128];
+        int pos = 0;
+        for (int i = 0; i < rxPtr && pos < (int)sizeof(hex) - 4; i++)
+            pos += snprintf(hex + pos, sizeof(hex) - pos, "%02X ", rxBuffer_[i]);
+        ESP_LOGW(TAG, "CRC mismatch: recv=0x%04X calc=0x%04X (%d bytes): %s", recvCrc, crcCheck, rxPtr, hex);
         return ModbusError::InvalidCRC;
     }
 
