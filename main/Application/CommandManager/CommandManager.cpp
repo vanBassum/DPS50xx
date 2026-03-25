@@ -1,4 +1,5 @@
 #include "CommandManager.h"
+#include "DeviceManager.h"
 #include "LogManager.h"
 #include "SettingsManager.h"
 #include "UpdateManager.h"
@@ -10,6 +11,7 @@
 #include "esp_heap_caps.h"
 #include "NetworkManager.h"
 #include <cstring>
+#include <cstdlib>
 
 const CommandManager::CommandEntry CommandManager::commands_[] = {
     { "ping",            &CommandManager::Cmd_Ping,            false },
@@ -21,6 +23,8 @@ const CommandManager::CommandEntry CommandManager::commands_[] = {
     { "reboot",          &CommandManager::Cmd_Reboot,          true  },
     { "wifiScan",        &CommandManager::Cmd_WifiScan,        false },
     { "getLogs",         &CommandManager::Cmd_GetLogs,         false },
+    { "getDPS5020",      &CommandManager::Cmd_GetDPS5020,      false },
+    { "setDPS5020",      &CommandManager::Cmd_SetDPS5020,      true  },
     { nullptr, nullptr, false },
 };
 
@@ -202,5 +206,52 @@ void CommandManager::Cmd_WifiScan(const char* json, JsonWriter& resp)
 void CommandManager::Cmd_GetLogs(const char* json, JsonWriter& resp)
 {
     serviceProvider_.getLogManager().WriteHistory(resp);
+}
+
+void CommandManager::Cmd_GetDPS5020(const char* json, JsonWriter& resp)
+{
+    auto& dps = serviceProvider_.getDeviceManager().getDPS5020();
+    const auto& d = dps.GetData();
+
+    resp.field("online", dps.IsOnline());
+    resp.field("setVoltage", d.setVoltage);
+    resp.field("setCurrent", d.setCurrent);
+    resp.field("outVoltage", d.outVoltage);
+    resp.field("outCurrent", d.outCurrent);
+    resp.field("outPower", d.outPower);
+    resp.field("inVoltage", d.inVoltage);
+    resp.field("keyLock", d.keyLock);
+    resp.field("protection", static_cast<int32_t>(d.protection));
+    resp.field("constantCurrent", d.constantCurrent);
+    resp.field("outputOn", d.outputOn);
+    resp.field("backlight", static_cast<int32_t>(d.backlight));
+    resp.field("model", static_cast<int32_t>(d.model));
+    resp.field("version", static_cast<int32_t>(d.version));
+}
+
+void CommandManager::Cmd_SetDPS5020(const char* json, JsonWriter& resp)
+{
+    char field[32] = {};
+    char value[32] = {};
+    ExtractJsonString(json, "field", field, sizeof(field));
+    ExtractJsonString(json, "value", value, sizeof(value));
+
+    auto& dps = serviceProvider_.getDeviceManager().getDPS5020();
+    ModbusError err = ModbusError::InvalidArguments;
+
+    if (strcmp(field, "voltage") == 0)
+        err = dps.SetVoltage(static_cast<float>(atof(value)));
+    else if (strcmp(field, "current") == 0)
+        err = dps.SetCurrent(static_cast<float>(atof(value)));
+    else if (strcmp(field, "output") == 0)
+        err = dps.SetOutput(strcmp(value, "true") == 0 || strcmp(value, "1") == 0);
+    else if (strcmp(field, "keyLock") == 0)
+        err = dps.SetKeyLock(strcmp(value, "true") == 0 || strcmp(value, "1") == 0);
+    else if (strcmp(field, "backlight") == 0)
+        err = dps.SetBacklight(static_cast<uint8_t>(atoi(value)));
+
+    resp.field("ok", err == ModbusError::NoError);
+    if (err != ModbusError::NoError)
+        resp.field("error", ModbusErrorToString(err));
 }
 

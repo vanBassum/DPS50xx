@@ -48,4 +48,6 @@ private:
     void Cmd_Reboot(const char* json, JsonWriter& resp);
     void Cmd_WifiScan(const char* json, JsonWriter& resp);
     void Cmd_GetLogs(const char* json, JsonWriter& resp);
+    void Cmd_GetDPS5020(const char* json, JsonWriter& resp);
+    void Cmd_SetDPS5020(const char* json, JsonWriter& resp);
 };

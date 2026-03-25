@@ -1,6 +1,7 @@
 #pragma once
 #include "ServiceProvider.h"
 #include "CommandManager/CommandManager.h"
+#include "DeviceManager/DeviceManager.h"
 #include "LogManager/LogManager.h"
 #include "NetworkManager/NetworkManager.h"
 #include "SettingsManager/SettingsManager.h"
@@ -17,6 +18,7 @@ public:
     ApplicationContext& operator=(const ApplicationContext&) = delete;
 
     CommandManager& getCommandManager() override { return m_commandManager; }
+    DeviceManager& getDeviceManager() override { return m_deviceManager; }
     LogManager& getLogManager() override { return m_logManager; }
     NetworkManager& getNetworkManager() override { return m_networkManager; }
     SettingsManager& getSettingsManager() override { return m_settingsManager; }
@@ -30,6 +32,7 @@ private:
     NetworkManager m_networkManager{*this};
     TimeManager m_timeManager{*this};
     CommandManager m_commandManager{*this};
+    DeviceManager m_deviceManager{*this};
     UpdateManager m_updateManager{*this};
     WebServerManager m_webServerManager{*this};
 };

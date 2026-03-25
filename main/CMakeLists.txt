@@ -8,10 +8,15 @@ set(SOURCE_FILES_LIST
     "Application/WebServerManager/StaticFileHandler.cpp"
     "Application/WebServerManager/WebSocketHandler.cpp"
     "Application/CommandManager/CommandManager.cpp"
+    "Application/DeviceManager/DeviceManager.cpp"
+    "Application/DeviceManager/DPS5020.cpp"
     "Application/UpdateManager/UpdateManager.cpp"
     "Application/SettingsManager/SettingsManager.cpp"
     "Application/LogManager/LogManager.cpp"
     "Application/TimeManager/TimeManager.cpp"
+    "lib/communication/modbus/ModbusMaster.cpp"
+    "lib/communication/modbus/ModbusPdu.cpp"
+    "lib/communication/modbus/ModbusRtuClient.cpp"
     "lib/system/DateTime.cpp"
     "lib/system/TimeSpan.cpp"
 )
@@ -22,12 +27,14 @@ set(INCLUDE_DIRS_LIST
     "Application/NetworkManager"
     "Application/WebServerManager"
     "Application/CommandManager"
+    "Application/DeviceManager"
     "Application/UpdateManager"
     "Application/SettingsManager"
     "Application/LogManager"
     "Application/TimeManager"
     "lib"
     "lib/common"
+    "lib/communication/modbus"
     "lib/rtos"
     "lib/json"
     "lib/system"
@@ -47,6 +54,7 @@ set(COMPONENT_REQUIRES
     wear_levelling
     esp_driver_i2c
     esp_driver_gpio
+    esp_driver_uart
     mdns
 )
 
