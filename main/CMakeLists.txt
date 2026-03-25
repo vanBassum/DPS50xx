@@ -58,7 +58,7 @@ set(COMPONENT_REQUIRES
     esp_driver_gpio
     esp_driver_uart
     mdns
-    espressif__mqtt
+    espressif__esp_mqtt
 )
 
 # Register component with ESP-IDF
