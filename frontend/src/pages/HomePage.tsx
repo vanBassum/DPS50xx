@@ -1,9 +1,20 @@
 import { useState } from "react"
-import { useDPS5020, PROTECTION_LABELS } from "@/hooks/use-dps5020"
+import { useDPS5020, PROTECTION_LABELS, type HistoryPoint } from "@/hooks/use-dps5020"
 import { useDeviceInfo } from "@/hooks/use-device-info"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { PowerIcon, ZapIcon, LockIcon, UnlockIcon, CpuIcon } from "lucide-react"
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ReferenceLine,
+  ResponsiveContainer,
+  Legend,
+} from "recharts"
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -11,7 +22,7 @@ function formatBytes(bytes: number): string {
 }
 
 export default function HomePage() {
-  const { data, setVoltage, setCurrent, setOutput, setKeyLock } = useDPS5020()
+  const { data, history, setVoltage, setCurrent, setOutput, setKeyLock } = useDPS5020()
   const info = useDeviceInfo()
 
   return (
@@ -36,25 +47,18 @@ export default function HomePage() {
 
       {/* Live readouts */}
       <div className="grid grid-cols-3 gap-3">
-        <ReadoutCard
-          label="Voltage"
-          value={data?.outVoltage}
-          unit="V"
-          color="text-yellow-400"
-        />
-        <ReadoutCard
-          label="Current"
-          value={data?.outCurrent}
-          unit="A"
-          color="text-cyan-400"
-        />
-        <ReadoutCard
-          label="Power"
-          value={data?.outPower}
-          unit="W"
-          color="text-orange-400"
-        />
+        <ReadoutCard label="Voltage" value={data?.outVoltage} unit="V" color="text-yellow-400" />
+        <ReadoutCard label="Current" value={data?.outCurrent} unit="A" color="text-cyan-400" />
+        <ReadoutCard label="Power" value={data?.outPower} unit="W" color="text-orange-400" />
       </div>
+
+      {/* Charts */}
+      {history.length > 1 && data?.online && (
+        <div className="space-y-4">
+          <VoltageCurrentChart history={history} setVoltage={data.setVoltage} setCurrent={data.setCurrent} />
+          <PowerChart history={history} />
+        </div>
+      )}
 
       {/* Status bar */}
       {data?.online && (
@@ -154,6 +158,129 @@ export default function HomePage() {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+// ── Charts ───────────────────────────────────────────────────
+
+const chartStyle = {
+  grid: "#333",
+  tooltip: { backgroundColor: "#1a1a1a", border: "1px solid #333", borderRadius: 6 },
+  tick: { fill: "#888", fontSize: 11 },
+}
+
+function VoltageCurrentChart({
+  history,
+  setVoltage,
+  setCurrent,
+}: {
+  history: HistoryPoint[]
+  setVoltage: number
+  setCurrent: number
+}) {
+  return (
+    <div className="rounded-xl border bg-card p-4 shadow-sm">
+      <div className="mb-2 text-xs font-medium text-muted-foreground">Voltage & Current</div>
+      <ResponsiveContainer width="100%" height={200}>
+        <LineChart data={history}>
+          <CartesianGrid strokeDasharray="3 3" stroke={chartStyle.grid} />
+          <XAxis
+            dataKey="time"
+            tick={chartStyle.tick}
+            interval="preserveStartEnd"
+            minTickGap={60}
+          />
+          <YAxis
+            yAxisId="v"
+            tick={chartStyle.tick}
+            width={40}
+            domain={[0, "auto"]}
+            label={{ value: "V", position: "insideTopLeft", fill: "#facc15", fontSize: 11, dy: -10 }}
+          />
+          <YAxis
+            yAxisId="a"
+            orientation="right"
+            tick={chartStyle.tick}
+            width={40}
+            domain={[0, "auto"]}
+            label={{ value: "A", position: "insideTopRight", fill: "#22d3ee", fontSize: 11, dy: -10 }}
+          />
+          <Tooltip contentStyle={chartStyle.tooltip} labelStyle={{ color: "#aaa" }} />
+          <Legend />
+          <ReferenceLine
+            yAxisId="v"
+            y={setVoltage}
+            stroke="#facc15"
+            strokeDasharray="6 3"
+            strokeOpacity={0.5}
+            label={{ value: `${setVoltage.toFixed(1)}V`, fill: "#facc15", fontSize: 10, position: "left" }}
+          />
+          <ReferenceLine
+            yAxisId="a"
+            y={setCurrent}
+            stroke="#22d3ee"
+            strokeDasharray="6 3"
+            strokeOpacity={0.5}
+            label={{ value: `${setCurrent.toFixed(1)}A`, fill: "#22d3ee", fontSize: 10, position: "right" }}
+          />
+          <Line
+            yAxisId="v"
+            type="monotone"
+            dataKey="voltage"
+            name="Voltage"
+            stroke="#facc15"
+            strokeWidth={2}
+            dot={false}
+            isAnimationActive={false}
+          />
+          <Line
+            yAxisId="a"
+            type="monotone"
+            dataKey="current"
+            name="Current"
+            stroke="#22d3ee"
+            strokeWidth={2}
+            dot={false}
+            isAnimationActive={false}
+          />
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  )
+}
+
+function PowerChart({ history }: { history: HistoryPoint[] }) {
+  return (
+    <div className="rounded-xl border bg-card p-4 shadow-sm">
+      <div className="mb-2 text-xs font-medium text-muted-foreground">Power</div>
+      <ResponsiveContainer width="100%" height={140}>
+        <LineChart data={history}>
+          <CartesianGrid strokeDasharray="3 3" stroke={chartStyle.grid} />
+          <XAxis
+            dataKey="time"
+            tick={chartStyle.tick}
+            interval="preserveStartEnd"
+            minTickGap={60}
+          />
+          <YAxis
+            tick={chartStyle.tick}
+            width={45}
+            domain={[0, "auto"]}
+            label={{ value: "W", position: "insideTopLeft", fill: "#fb923c", fontSize: 11, dy: -10 }}
+          />
+          <Tooltip contentStyle={chartStyle.tooltip} labelStyle={{ color: "#aaa" }} />
+          <Line
+            type="monotone"
+            dataKey="power"
+            name="Power"
+            stroke="#fb923c"
+            strokeWidth={2}
+            dot={false}
+            isAnimationActive={false}
+          />
+        </LineChart>
+      </ResponsiveContainer>
     </div>
   )
 }

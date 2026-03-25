@@ -1,15 +1,42 @@
-import { useEffect, useState, useCallback } from "react"
+import { useEffect, useState, useCallback, useRef } from "react"
 import { backend, type DPS5020Data } from "@/lib/backend"
 import { useConnectionStatus } from "@/hooks/use-connection-status"
+
+export interface HistoryPoint {
+  time: string
+  voltage: number
+  current: number
+  power: number
+}
+
+const MAX_HISTORY = 300 // 5 minutes at 1s poll
 
 export function useDPS5020(pollIntervalMs = 1000) {
   const connection = useConnectionStatus()
   const [data, setData] = useState<DPS5020Data | null>(null)
+  const [history, setHistory] = useState<HistoryPoint[]>([])
+  const dataRef = useRef(data)
+  dataRef.current = data
 
   const refresh = useCallback(async () => {
     try {
       const d = await backend.getDPS5020()
       setData(d)
+
+      if (d.online) {
+        setHistory((prev) => {
+          const next = [
+            ...prev,
+            {
+              time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+              voltage: d.outVoltage,
+              current: d.outCurrent,
+              power: d.outPower,
+            },
+          ]
+          return next.length > MAX_HISTORY ? next.slice(-MAX_HISTORY) : next
+        })
+      }
     } catch {
       // ignore
     }
@@ -46,7 +73,7 @@ export function useDPS5020(pollIntervalMs = 1000) {
     refresh()
   }, [refresh])
 
-  return { data, setVoltage, setCurrent, setOutput, setKeyLock, refresh }
+  return { data, history, setVoltage, setCurrent, setOutput, setKeyLock, refresh }
 }
 
 export const PROTECTION_LABELS = ["None", "OVP", "OCP", "OPP"] as const
