@@ -124,10 +124,12 @@ ModbusError ModbusRtuClient::Execute(uint8_t unitId,
 
     // -------------------------
     // Flush RX, send frame, wait for TX complete
+    // Turnaround delay gives the slave time to switch to transmit mode
     // -------------------------
     uart_flush_input(port_);
     uart_write_bytes(port_, txFrame, wrPtr);
     uart_wait_tx_done(port_, pdMS_TO_TICKS(100));
+    vTaskDelay(pdMS_TO_TICKS(5));
 
     // -------------------------
     // Read response using deterministic frame-size detection

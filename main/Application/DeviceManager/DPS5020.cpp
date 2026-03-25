@@ -9,15 +9,29 @@ DPS5020::DPS5020(ModbusMaster &master, uint8_t address)
 ModbusError DPS5020::Poll()
 {
     uint16_t regs[DPS5020Reg::RegCount];
+    ModbusError err = ModbusError::Timeout;
 
-    ModbusError err = master_.ReadHoldingRegisters(
-        address_, DPS5020Reg::RegStart, DPS5020Reg::RegCount, regs, TIMEOUT_MS);
+    // Retry up to MAX_RETRIES times - the DPS5020 MCU is shared with
+    // display/controls and frequently misses Modbus requests
+    for (int attempt = 0; attempt < MAX_RETRIES; attempt++)
+    {
+        err = master_.ReadHoldingRegisters(
+            address_, DPS5020Reg::RegStart, DPS5020Reg::RegCount, regs, TIMEOUT_MS);
+
+        if (err == ModbusError::NoError)
+            break;
+
+        ESP_LOGD(TAG, "Attempt %d/%d failed: %s", attempt + 1, MAX_RETRIES, ModbusErrorToString(err));
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
 
     if (err != ModbusError::NoError)
     {
-        if (online_)
+        failCount_++;
+        if (online_ && failCount_ >= OFFLINE_THRESHOLD)
         {
-            ESP_LOGW(TAG, "Poll failed: %s", ModbusErrorToString(err));
+            ESP_LOGW(TAG, "DPS5020 offline after %d consecutive failures (last: %s)",
+                     failCount_, ModbusErrorToString(err));
             online_ = false;
         }
         return err;
@@ -26,8 +40,9 @@ ModbusError DPS5020::Poll()
     if (!online_)
     {
         ESP_LOGI(TAG, "DPS5020 online (addr=%d)", address_);
-        online_ = true;
     }
+    online_ = true;
+    failCount_ = 0;
 
     data_.setVoltage      = regs[DPS5020Reg::SetVoltage]  / 100.0f;
     data_.setCurrent      = regs[DPS5020Reg::SetCurrent]  / 100.0f;
