@@ -10,19 +10,23 @@ DeviceManager::DeviceManager(ServiceProvider &serviceProvider)
 
 void DeviceManager::Init()
 {
-    initState_.Begin();
+    auto initAttempt = initState_.TryBeginInit();
+    if (!initAttempt)
+    {
+        ESP_LOGW(TAG, "Already initialized or initializing");
+        return;
+    }
 
     rtuClient_.Init(UART_TX_PIN, UART_RX_PIN, UART_BAUD);
 
-    pollTask_.Run("dev_poll", 4, 4096, [this]()
-    {
-        PollLoop();
-    });
+    pollTask_.Init("dev_poll", 4, 4096);
+    pollTask_.SetHandler([this]() { PollLoop(); });
+    pollTask_.Run();
 
     ESP_LOGI(TAG, "DeviceManager initialized (TX=%d, RX=%d, baud=%lu)",
              UART_TX_PIN, UART_RX_PIN, (unsigned long)UART_BAUD);
 
-    initState_.Complete();
+    initAttempt.SetReady();
 }
 
 void DeviceManager::PollLoop()
