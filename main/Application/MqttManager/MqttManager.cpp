@@ -27,8 +27,7 @@ void MqttManager::Init()
 
     auto &settings = serviceProvider_.getSettingsManager();
 
-    char enabledStr[8] = {};
-    settings.getBool("mqtt.enabled", &enabled_);
+    enabled_ = settings.getBool("mqtt.enabled");
     if (!enabled_)
     {
         ESP_LOGI(TAG, "MQTT disabled");
@@ -57,12 +56,10 @@ void MqttManager::StartClient()
     char broker[128] = {};
     char user[64] = {};
     char pass[64] = {};
-    int32_t port = 1883;
-
     settings.getString("mqtt.broker", broker, sizeof(broker));
     settings.getString("mqtt.user", user, sizeof(user));
     settings.getString("mqtt.pass", pass, sizeof(pass));
-    settings.getInt("mqtt.port", &port);
+    int32_t port = settings.getInt("mqtt.port", 1883);
 
     if (broker[0] == '\0')
     {
