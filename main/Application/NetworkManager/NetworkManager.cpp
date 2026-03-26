@@ -35,12 +35,6 @@ void NetworkManager::Init()
         ESP_ERROR_CHECK(err);
     }
 
-    // mDNS — dps50xx.local
-    ESP_ERROR_CHECK(mdns_init());
-    mdns_hostname_set("dps50xx");
-    mdns_instance_name_set("DPS50xx");
-    mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
-
     // Reduce noisy WiFi/LWIP init logs
     esp_log_level_set("wifi", ESP_LOG_WARN);
     esp_log_level_set("wifi_init", ESP_LOG_WARN);
@@ -49,6 +43,20 @@ void NetworkManager::Init()
 
     wifi_interface_.SetEventHandler([this](const NetworkEvent& e) { HandleNetworkEvent(e); });
     wifi_interface_.Init();
+
+    // Set hostname from device.name setting so it shows in the router
+    auto& settings = serviceProvider_.getSettingsManager();
+    char deviceName[33] = {};
+    settings.getString("device.name", deviceName, sizeof(deviceName));
+    if (deviceName[0] == '\0')
+        strncpy(deviceName, "DPS50xx", sizeof(deviceName) - 1);
+    wifi_interface_.SetHostname(deviceName);
+
+    // mDNS — <deviceName>.local
+    ESP_ERROR_CHECK(mdns_init());
+    mdns_hostname_set(deviceName);
+    mdns_instance_name_set(deviceName);
+    mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
 
     // Setup connect timeout timer
     connectTimer_.Init("sta_timeout", pdMS_TO_TICKS(StaConnectTimeoutMs), false);
@@ -73,7 +81,6 @@ void NetworkManager::Init()
     ESP_LOGI(TAG, "Initialized");
 
     // Load WiFi credentials from settings and try to connect
-    auto& settings = serviceProvider_.getSettingsManager();
     settings.getString("wifi.ssid", staSsid_, sizeof(staSsid_));
     settings.getString("wifi.password", staPassword_, sizeof(staPassword_));
 

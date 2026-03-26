@@ -9,6 +9,7 @@ class WiFiInterface final : public NetworkInterface {
 public:
     void Init();
 
+    void SetHostname(const char* hostname);
     void ConnectSta(const char* ssid, const char* password);
     void StartAP(const char* ssid, const char* password, uint8_t channel = 1, uint8_t maxConnections = 4);
     void Stop();
