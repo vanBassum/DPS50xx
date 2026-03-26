@@ -11,6 +11,10 @@ ESP32 firmware for monitoring and controlling DPS5020 programmable DC power supp
 
 Pin assignments are defined in [`main/hardware/BoardConfig.h`](main/hardware/BoardConfig.h).
 
+## Case
+
+A 3D-printable case is available on [Thingiverse](https://www.thingiverse.com/thing:7191665).
+
 ## Flashing
 
 Download the factory binary for your target from the [Releases](../../releases) page.
