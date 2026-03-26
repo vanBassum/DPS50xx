@@ -2,6 +2,7 @@
 #include "ServiceProvider.h"
 #include "CommandManager/CommandManager.h"
 #include "DeviceManager/DeviceManager.h"
+#include "HomeAssistantManager/HomeAssistantManager.h"
 #include "LogManager/LogManager.h"
 #include "MqttManager/MqttManager.h"
 #include "NetworkManager/NetworkManager.h"
@@ -20,6 +21,7 @@ public:
 
     CommandManager& getCommandManager() override { return m_commandManager; }
     DeviceManager& getDeviceManager() override { return m_deviceManager; }
+    HomeAssistantManager& getHomeAssistantManager() override { return m_homeAssistantManager; }
     LogManager& getLogManager() override { return m_logManager; }
     MqttManager& getMqttManager() override { return m_mqttManager; }
     NetworkManager& getNetworkManager() override { return m_networkManager; }
@@ -34,8 +36,9 @@ private:
     NetworkManager m_networkManager{*this};
     TimeManager m_timeManager{*this};
     CommandManager m_commandManager{*this};
-    DeviceManager m_deviceManager{*this};
     MqttManager m_mqttManager{*this};
+    DeviceManager m_deviceManager{*this};
+    HomeAssistantManager m_homeAssistantManager{*this};
     UpdateManager m_updateManager{*this};
     WebServerManager m_webServerManager{*this};
 };

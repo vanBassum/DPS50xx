@@ -3,30 +3,33 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-DeviceManager::DeviceManager(ServiceProvider &serviceProvider)
-    : serviceProvider_(serviceProvider)
+DeviceManager::DeviceManager(ServiceProvider &ctx)
+    : serviceProvider_(ctx)
 {
 }
 
 void DeviceManager::Init()
 {
-    auto initAttempt = initState_.TryBeginInit();
-    if (!initAttempt)
+    auto init = initState_.TryBeginInit();
+    if (!init)
     {
         ESP_LOGW(TAG, "Already initialized or initializing");
         return;
     }
 
-    rtuClient_.Init(MODBUS_TX_PIN, MODBUS_RX_PIN, MODBUS_BAUD);
+    led_.Init();
+
+    rtuClient_.Init(BoardConfig::MODBUS_TX_PIN, BoardConfig::MODBUS_RX_PIN,
+                    BoardConfig::MODBUS_BAUD);
 
     pollTask_.Init("dev_poll", 4, 4096);
     pollTask_.SetHandler([this]() { PollLoop(); });
     pollTask_.Run();
 
-    ESP_LOGI(TAG, "DeviceManager initialized (TX=%d, RX=%d, baud=%lu)",
-             MODBUS_TX_PIN, MODBUS_RX_PIN, (unsigned long)MODBUS_BAUD);
-
-    initAttempt.SetReady();
+    init.SetReady();
+    ESP_LOGI(TAG, "Initialized (TX=%d, RX=%d, baud=%lu)",
+             BoardConfig::MODBUS_TX_PIN, BoardConfig::MODBUS_RX_PIN,
+             (unsigned long)BoardConfig::MODBUS_BAUD);
 }
 
 void DeviceManager::PollLoop()

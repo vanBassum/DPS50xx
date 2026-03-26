@@ -11,6 +11,7 @@ set(SOURCE_FILES_LIST
     "Application/DeviceManager/DeviceManager.cpp"
     "Application/DeviceManager/DPS5020.cpp"
     "Application/MqttManager/MqttManager.cpp"
+    "Application/HomeAssistantManager/HomeAssistantManager.cpp"
     "Application/UpdateManager/UpdateManager.cpp"
     "Application/SettingsManager/SettingsManager.cpp"
     "Application/LogManager/LogManager.cpp"
@@ -30,17 +31,18 @@ set(INCLUDE_DIRS_LIST
     "Application/CommandManager"
     "Application/DeviceManager"
     "Application/MqttManager"
+    "Application/HomeAssistantManager"
     "Application/UpdateManager"
     "Application/SettingsManager"
     "Application/LogManager"
     "Application/TimeManager"
+    "hardware"
     "lib"
     "lib/common"
     "lib/communication/modbus"
     "lib/rtos"
     "lib/json"
     "lib/system"
-    "hardware"
 )
 
 set(COMPONENT_REQUIRES
@@ -55,7 +57,6 @@ set(COMPONENT_REQUIRES
     esp_partition
     fatfs
     wear_levelling
-    esp_driver_i2c
     esp_driver_gpio
     esp_driver_uart
     mdns

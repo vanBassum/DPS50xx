@@ -22,4 +22,36 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 idf_build_set_property(MINIMAL_BUILD ON)
 project(DPS50xx)
 
+# ── Frontend build ────────────────────────────────────────────
+# Automatically build the React frontend before generating the FAT image.
+# If pnpm is not installed, creates a placeholder so the build still succeeds.
+
+find_program(PNPM pnpm)
+if(PNPM)
+    add_custom_target(frontend_build
+        COMMAND ${PNPM} install
+        COMMAND ${PNPM} build
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/frontend
+        COMMENT "Building frontend (pnpm install && pnpm build)..."
+    )
+endif()
+
+# Ensure www/ exists (empty dir is fine — FAT generation just needs a valid directory)
+if(NOT EXISTS ${CMAKE_SOURCE_DIR}/www)
+    file(MAKE_DIRECTORY ${CMAKE_SOURCE_DIR}/www)
+endif()
+file(GLOB WWW_CONTENTS ${CMAKE_SOURCE_DIR}/www/*)
+if(NOT PNPM AND NOT WWW_CONTENTS)
+    file(WRITE ${CMAKE_SOURCE_DIR}/www/index.html
+        "<!DOCTYPE html><html><body><h1>Frontend not built</h1>"
+        "<p>Install <a href=\"https://pnpm.io\">pnpm</a> and rebuild, "
+        "or run: <code>cd frontend && pnpm install && pnpm build</code></p>"
+        "</body></html>\n")
+    message(STATUS "pnpm not found — frontend will not be built automatically")
+endif()
+
 fatfs_create_spiflash_image(www www FLASH_IN_PROJECT)
+
+if(PNPM)
+    add_dependencies(fatfs_www_bin frontend_build)
+endif()

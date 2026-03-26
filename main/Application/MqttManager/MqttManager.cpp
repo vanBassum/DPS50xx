@@ -1,77 +1,133 @@
 #include "MqttManager.h"
-#include "DeviceManager.h"
-#include "SettingsManager.h"
-#include "DPS5020.h"
+#include "SettingsManager/SettingsManager.h"
+#include "JsonWriter.h"
+#include "BufferStream.h"
 #include "esp_log.h"
+#include "esp_mac.h"
+#include "esp_app_desc.h"
+#include "esp_system.h"
+#include "esp_timer.h"
+#include "esp_wifi.h"
+#include "esp_netif.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <cstring>
 #include <cstdio>
-#include <cstdlib>
 
-MqttManager::MqttManager(ServiceProvider &serviceProvider)
-    : serviceProvider_(serviceProvider)
+// ──────────────────────────────────────────────────────────────
+// Construction & Init
+// ──────────────────────────────────────────────────────────────
+
+MqttManager::MqttManager(ServiceProvider &ctx)
+    : serviceProvider_(ctx)
 {
 }
 
 void MqttManager::Init()
 {
-    auto initAttempt = initState_.TryBeginInit();
-    if (!initAttempt)
+    auto init = initState_.TryBeginInit();
+    if (!init)
     {
         ESP_LOGW(TAG, "Already initialized or initializing");
         return;
     }
 
-    auto &settings = serviceProvider_.getSettingsManager();
+    enabled_ = serviceProvider_.getSettingsManager().getBool("mqtt.enabled", false);
 
-    enabled_ = settings.getBool("mqtt.enabled");
     if (!enabled_)
     {
         ESP_LOGI(TAG, "MQTT disabled");
-        initAttempt.SetReady();
+        init.SetReady();
         return;
     }
 
-    settings.getString("mqtt.prefix", prefix_, sizeof(prefix_));
-    if (prefix_[0] == '\0')
-        strncpy(prefix_, "dps50xx", sizeof(prefix_));
+    BuildDeviceId();
+
+    char prefix[32] = {};
+    serviceProvider_.getSettingsManager().getString("mqtt.prefix", prefix, sizeof(prefix));
+    if (prefix[0] == '\0')
+        snprintf(prefix, sizeof(prefix), "dps50xx");
+    snprintf(baseTopic_, sizeof(baseTopic_), "%s/%s", prefix, deviceId_);
 
     StartClient();
 
-    publishTask_.Init("mqtt_pub", 4, 4096);
-    publishTask_.SetHandler([this]() { PublishLoop(); });
-    publishTask_.Run();
+    publishTimer_.Init("mqtt_pub", pdMS_TO_TICKS(30000), true);
+    publishTimer_.SetHandler([this]()
+    {
+        if (connected_)
+            PublishState();
+    });
 
-    ESP_LOGI(TAG, "MQTT initialized (prefix=%s)", prefix_);
-    initAttempt.SetReady();
+    init.SetReady();
+    ESP_LOGI(TAG, "Initialized (base topic: %s)", baseTopic_);
 }
+
+void MqttManager::BuildDeviceId()
+{
+    uint8_t mac[6];
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    snprintf(deviceId_, sizeof(deviceId_), "%02x%02x%02x%02x",
+             mac[2], mac[3], mac[4], mac[5]);
+}
+
+// ──────────────────────────────────────────────────────────────
+// Registration (for other managers to add entities & commands)
+// ──────────────────────────────────────────────────────────────
+
+void MqttManager::RegisterCommand(const char *name, MqttCommandHandler handler)
+{
+    if (cmdHandlerCount_ >= MAX_COMMAND_HANDLERS)
+    {
+        ESP_LOGE(TAG, "Command handler table full");
+        return;
+    }
+    auto &entry = cmdHandlers_[cmdHandlerCount_++];
+    strncpy(entry.name, name, sizeof(entry.name) - 1);
+    entry.handler = handler;
+}
+
+void MqttManager::RegisterDiscovery(std::function<void()> callback)
+{
+    if (discoveryCallbackCount_ >= MAX_DISCOVERY_CALLBACKS)
+    {
+        ESP_LOGE(TAG, "Discovery callback table full");
+        return;
+    }
+    discoveryCallbacks_[discoveryCallbackCount_++] = callback;
+
+    // If already connected, publish immediately so late registrations
+    // don't miss the initial discovery window.
+    if (connected_)
+        callback();
+}
+
+// ──────────────────────────────────────────────────────────────
+// MQTT Client
+// ──────────────────────────────────────────────────────────────
 
 void MqttManager::StartClient()
 {
     auto &settings = serviceProvider_.getSettingsManager();
 
-    char broker[128] = {};
-    char user[64] = {};
+    char broker[64] = {};
+    char user[32] = {};
     char pass[64] = {};
     settings.getString("mqtt.broker", broker, sizeof(broker));
     settings.getString("mqtt.user", user, sizeof(user));
     settings.getString("mqtt.pass", pass, sizeof(pass));
-    int32_t port = settings.getInt("mqtt.port", 1883);
+    int port = settings.getInt("mqtt.port", 1883);
 
     if (broker[0] == '\0')
     {
-        ESP_LOGW(TAG, "No MQTT broker configured");
+        ESP_LOGW(TAG, "No broker configured, MQTT will not connect");
         return;
     }
 
-    // Build URI: mqtt://broker:port
-    char uri[192] = {};
-    snprintf(uri, sizeof(uri), "mqtt://%s:%ld", broker, (long)port);
+    char uri[128];
+    snprintf(uri, sizeof(uri), "mqtt://%s:%d", broker, port);
 
-    // LWT topic
-    char lwtTopic[96] = {};
-    BuildTopic(lwtTopic, sizeof(lwtTopic), "available");
+    char lwtTopic[128];
+    snprintf(lwtTopic, sizeof(lwtTopic), "%s/status", baseTopic_);
 
     esp_mqtt_client_config_t cfg = {};
     cfg.broker.address.uri = uri;
@@ -84,57 +140,54 @@ void MqttManager::StartClient()
     cfg.session.last_will.retain = 1;
 
     client_ = esp_mqtt_client_init(&cfg);
-    if (!client_)
-    {
-        ESP_LOGE(TAG, "Failed to init MQTT client");
-        return;
-    }
-
-    esp_mqtt_client_register_event(client_, MQTT_EVENT_ANY, EventHandlerStatic, this);
+    esp_mqtt_client_register_event(client_, static_cast<esp_mqtt_event_id_t>(ESP_EVENT_ANY_ID),
+                                   EventHandler, this);
     esp_mqtt_client_start(client_);
 
-    ESP_LOGI(TAG, "MQTT client started: %s", uri);
+    ESP_LOGI(TAG, "Connecting to %s", uri);
 }
 
-int MqttManager::BuildTopic(char *buf, size_t bufSize, const char *suffix) const
+// ──────────────────────────────────────────────────────────────
+// Event handling
+// ──────────────────────────────────────────────────────────────
+
+void MqttManager::EventHandler(void *args, esp_event_base_t base,
+                                int32_t eventId, void *eventData)
 {
-    return snprintf(buf, bufSize, "%s/%s", prefix_, suffix);
+    auto *self = static_cast<MqttManager *>(args);
+    self->OnEvent(static_cast<esp_mqtt_event_handle_t>(eventData));
 }
 
-// ── Event handling ──────────────────────────────────────────
-
-void MqttManager::EventHandlerStatic(void *arg, esp_event_base_t, int32_t id, void *data)
-{
-    auto *self = static_cast<MqttManager *>(arg);
-    self->HandleEvent(static_cast<esp_mqtt_event_handle_t>(data));
-}
-
-void MqttManager::HandleEvent(esp_mqtt_event_handle_t event)
+void MqttManager::OnEvent(esp_mqtt_event_handle_t event)
 {
     switch (event->event_id)
     {
     case MQTT_EVENT_CONNECTED:
-        ESP_LOGI(TAG, "MQTT connected");
+        ESP_LOGI(TAG, "Connected to broker");
         connected_ = true;
-        Subscribe();
+        PublishDiscovery();
         {
-            char topic[96];
-            BuildTopic(topic, sizeof(topic), "available");
+            char topic[128];
+            snprintf(topic, sizeof(topic), "%s/status", baseTopic_);
             esp_mqtt_client_publish(client_, topic, "online", 6, 1, 1);
         }
+        Subscribe();
+        PublishState();
+        publishTimer_.Start();
         break;
 
     case MQTT_EVENT_DISCONNECTED:
-        ESP_LOGW(TAG, "MQTT disconnected");
+        ESP_LOGW(TAG, "Disconnected from broker");
         connected_ = false;
+        publishTimer_.Stop();
         break;
 
     case MQTT_EVENT_DATA:
-        HandleCommand(event->topic, event->data, event->data_len);
+        HandleCommand(event->topic, event->topic_len, event->data, event->data_len);
         break;
 
     case MQTT_EVENT_ERROR:
-        ESP_LOGW(TAG, "MQTT error");
+        ESP_LOGE(TAG, "MQTT error");
         break;
 
     default:
@@ -144,96 +197,273 @@ void MqttManager::HandleEvent(esp_mqtt_event_handle_t event)
 
 void MqttManager::Subscribe()
 {
-    char topic[96];
-    BuildTopic(topic, sizeof(topic), "set/#");
+    char topic[128];
+    snprintf(topic, sizeof(topic), "%s/set/#", baseTopic_);
     esp_mqtt_client_subscribe(client_, topic, 1);
     ESP_LOGI(TAG, "Subscribed to %s", topic);
 }
 
-void MqttManager::HandleCommand(const char *topic, const char *data, int dataLen)
+void MqttManager::HandleCommand(const char *topic, int topicLen,
+                                 const char *data, int dataLen)
 {
-    if (!topic || !data || dataLen <= 0)
+    char setPrefix[128];
+    int prefixLen = snprintf(setPrefix, sizeof(setPrefix), "%s/set/", baseTopic_);
+
+    if (topicLen <= prefixLen)
         return;
 
-    // Extract suffix after "{prefix}/set/"
-    char setPrefix[96];
-    BuildTopic(setPrefix, sizeof(setPrefix), "set/");
-    size_t prefixLen = strlen(setPrefix);
+    // Extract the command name after "{baseTopic}/set/"
+    char cmd[32] = {};
+    int cmdLen = topicLen - prefixLen;
+    if (cmdLen >= static_cast<int>(sizeof(cmd)))
+        cmdLen = sizeof(cmd) - 1;
+    memcpy(cmd, topic + prefixLen, cmdLen);
 
-    if (strncmp(topic, setPrefix, prefixLen) != 0)
-        return;
+    ESP_LOGI(TAG, "Command: %s", cmd);
 
-    const char *cmd = topic + prefixLen;
-
-    // Null-terminate data
-    char val[32] = {};
-    int len = dataLen < (int)sizeof(val) - 1 ? dataLen : (int)sizeof(val) - 1;
-    memcpy(val, data, len);
-    val[len] = '\0';
-
-    auto &dps = serviceProvider_.getDeviceManager().getDPS5020();
-    ModbusError err = ModbusError::InvalidArguments;
-
-    if (strcmp(cmd, "voltage") == 0)
-        err = dps.SetVoltage(static_cast<float>(atof(val)));
-    else if (strcmp(cmd, "current") == 0)
-        err = dps.SetCurrent(static_cast<float>(atof(val)));
-    else if (strcmp(cmd, "output") == 0)
-        err = dps.SetOutput(strcmp(val, "on") == 0 || strcmp(val, "1") == 0 || strcmp(val, "true") == 0);
-    else if (strcmp(cmd, "keylock") == 0)
-        err = dps.SetKeyLock(strcmp(val, "on") == 0 || strcmp(val, "1") == 0 || strcmp(val, "true") == 0);
-    else
-        ESP_LOGW(TAG, "Unknown MQTT command: %s", cmd);
-
-    if (err != ModbusError::NoError && err != ModbusError::InvalidArguments)
-        ESP_LOGW(TAG, "MQTT command '%s' failed: %s", cmd, ModbusErrorToString(err));
-}
-
-// ── Publishing ──────────────────────────────────────────────
-
-void MqttManager::PublishLoop()
-{
-    vTaskDelay(pdMS_TO_TICKS(5000)); // wait for network + MQTT connect
-
-    while (true)
+    // Built-in commands
+    if (strcmp(cmd, "reboot") == 0)
     {
-        if (connected_)
-            PublishState();
-
-        vTaskDelay(pdMS_TO_TICKS(PUBLISH_INTERVAL_MS));
+        ESP_LOGI(TAG, "Reboot requested via MQTT");
+        vTaskDelay(pdMS_TO_TICKS(500));
+        esp_restart();
+        return;
     }
+
+    // Registered command handlers
+    for (int i = 0; i < cmdHandlerCount_; i++)
+    {
+        if (strcmp(cmd, cmdHandlers_[i].name) == 0)
+        {
+            cmdHandlers_[i].handler(data, dataLen);
+            return;
+        }
+    }
+
+    ESP_LOGW(TAG, "Unknown command: %s", cmd);
 }
 
-void MqttManager::PublishValue(const char *suffix, const char *value)
-{
-    char topic[96];
-    BuildTopic(topic, sizeof(topic), suffix);
-    esp_mqtt_client_publish(client_, topic, value, (int)strlen(value), 0, 1);
-}
+// ──────────────────────────────────────────────────────────────
+// Publishing
+// ──────────────────────────────────────────────────────────────
 
-void MqttManager::PublishFloat(const char *suffix, float value)
+void MqttManager::Publish(const char *subtopic, const char *payload, bool retain)
 {
-    char buf[16];
-    snprintf(buf, sizeof(buf), "%.2f", value);
-    PublishValue(suffix, buf);
+    if (!connected_ || !client_)
+        return;
+
+    char topic[128];
+    snprintf(topic, sizeof(topic), "%s/%s", baseTopic_, subtopic);
+    esp_mqtt_client_publish(client_, topic, payload, 0, 0, retain ? 1 : 0);
 }
 
 void MqttManager::PublishState()
 {
-    auto &dps = serviceProvider_.getDeviceManager().getDPS5020();
-    const auto &d = dps.GetData();
+    // IP address
+    char ipStr[16] = "0.0.0.0";
+    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (netif)
+    {
+        esp_netif_ip_info_t ipInfo;
+        if (esp_netif_get_ip_info(netif, &ipInfo) == ESP_OK)
+            esp_ip4addr_ntoa(&ipInfo.ip, ipStr, sizeof(ipStr));
+    }
 
-    PublishValue("online", dps.IsOnline() ? "true" : "false");
-    PublishFloat("setVoltage", d.setVoltage);
-    PublishFloat("setCurrent", d.setCurrent);
-    PublishFloat("outVoltage", d.outVoltage);
-    PublishFloat("outCurrent", d.outCurrent);
-    PublishFloat("outPower", d.outPower);
-    PublishFloat("inVoltage", d.inVoltage);
-    PublishValue("outputOn", d.outputOn ? "on" : "off");
-    PublishValue("protection", PROTECTION_LABELS[static_cast<int>(d.protection) & 3]);
-    PublishValue("cvcc", d.constantCurrent ? "CC" : "CV");
-    PublishValue("keyLock", d.keyLock ? "on" : "off");
+    // WiFi RSSI
+    int32_t rssi = 0;
+    wifi_ap_record_t apInfo;
+    if (esp_wifi_sta_get_ap_info(&apInfo) == ESP_OK)
+        rssi = apInfo.rssi;
+
+    // Uptime
+    uint32_t uptimeSec = static_cast<uint32_t>(esp_timer_get_time() / 1000000);
+
+    // Free heap
+    uint32_t freeHeap = static_cast<uint32_t>(esp_get_free_heap_size());
+
+    char buf[256];
+    BufferStream stream(buf, sizeof(buf));
+    JsonWriter json(stream);
+    json.beginObject();
+    json.field("ip", ipStr);
+    json.field("rssi", rssi);
+    json.field("uptime", uptimeSec);
+    json.field("heap", freeHeap);
+    json.endObject();
+
+    Publish("state", buf);
 }
 
-const char *const MqttManager::PROTECTION_LABELS[] = {"none", "OVP", "OCP", "OPP"};
+// ──────────────────────────────────────────────────────────────
+// Home Assistant MQTT Discovery
+// ──────────────────────────────────────────────────────────────
+
+static void WriteDeviceBlock(JsonWriter &json, const char *deviceId,
+                             const char *deviceName, const char *version)
+{
+    json.fieldObject("dev");
+
+    json.fieldArray("ids");
+    char id[32];
+    snprintf(id, sizeof(id), "dps50xx_%s", deviceId);
+    json.value(id);
+    json.endArray();
+
+    json.field("name", deviceName);
+    json.field("mf", "DPS50xx");
+    json.field("mdl", CONFIG_IDF_TARGET);
+    json.field("sw", version);
+
+    json.endObject();
+}
+
+void MqttManager::PublishEntityDiscovery(const char *component, const char *objectId,
+                                          std::function<void(JsonWriter &)> writeFields)
+{
+    if (!connected_ || !client_)
+        return;
+
+    const esp_app_desc_t *app = esp_app_get_description();
+
+    char deviceName[32] = {};
+    serviceProvider_.getSettingsManager().getString("device.name", deviceName, sizeof(deviceName));
+    if (deviceName[0] == '\0')
+        snprintf(deviceName, sizeof(deviceName), "DPS50xx");
+
+    char availTopic[128];
+    snprintf(availTopic, sizeof(availTopic), "%s/status", baseTopic_);
+
+    char configTopic[192];
+    snprintf(configTopic, sizeof(configTopic),
+             "homeassistant/%s/%s/%s/config", component, deviceId_, objectId);
+
+    char uid[64];
+    snprintf(uid, sizeof(uid), "dps50xx_%s_%s", deviceId_, objectId);
+
+    char buf[512];
+    BufferStream stream(buf, sizeof(buf));
+    JsonWriter json(stream);
+
+    json.beginObject();
+    json.field("uniq_id", uid);
+    json.field("avty_t", availTopic);
+    WriteDeviceBlock(json, deviceId_, deviceName, app->version);
+    writeFields(json);
+    json.endObject();
+
+    esp_mqtt_client_publish(client_, configTopic, buf, 0, 1, 1);
+}
+
+void MqttManager::PublishDiscovery()
+{
+    const esp_app_desc_t *app = esp_app_get_description();
+
+    char deviceName[32] = {};
+    serviceProvider_.getSettingsManager().getString("device.name", deviceName, sizeof(deviceName));
+    if (deviceName[0] == '\0')
+        snprintf(deviceName, sizeof(deviceName), "DPS50xx");
+
+    char stateTopic[128];
+    snprintf(stateTopic, sizeof(stateTopic), "%s/state", baseTopic_);
+
+    char availTopic[128];
+    snprintf(availTopic, sizeof(availTopic), "%s/status", baseTopic_);
+
+    // ── Diagnostic sensors ───────────────────────────────────
+
+    struct SensorDef
+    {
+        const char *objectId;
+        const char *name;
+        const char *valueTemplate;
+        const char *deviceClass;
+        const char *unit;
+        const char *icon;
+    };
+
+    static const SensorDef sensors[] = {
+        {"ip",     "IP Address",  "{{ value_json.ip }}",     nullptr,           nullptr, "mdi:ip-network"},
+        {"rssi",   "WiFi Signal", "{{ value_json.rssi }}",   "signal_strength", "dBm",   nullptr},
+        {"uptime", "Uptime",      "{{ value_json.uptime }}", "duration",        "s",     nullptr},
+        {"heap",   "Free Heap",   "{{ value_json.heap }}",   nullptr,           "B",     "mdi:memory"},
+    };
+
+    for (const auto &s : sensors)
+    {
+        char configTopic[192];
+        snprintf(configTopic, sizeof(configTopic),
+                 "homeassistant/sensor/%s/%s/config", deviceId_, s.objectId);
+
+        char buf[512];
+        BufferStream stream(buf, sizeof(buf));
+        JsonWriter json(stream);
+
+        json.beginObject();
+
+        json.field("name", s.name);
+
+        char uid[64];
+        snprintf(uid, sizeof(uid), "dps50xx_%s_%s", deviceId_, s.objectId);
+        json.field("uniq_id", uid);
+
+        json.field("stat_t", stateTopic);
+        json.field("val_tpl", s.valueTemplate);
+
+        if (s.deviceClass)
+            json.field("dev_cla", s.deviceClass);
+        if (s.unit)
+            json.field("unit_of_meas", s.unit);
+        if (s.icon)
+            json.field("ic", s.icon);
+
+        json.field("ent_cat", "diagnostic");
+        json.field("avty_t", availTopic);
+
+        WriteDeviceBlock(json, deviceId_, deviceName, app->version);
+
+        json.endObject();
+
+        esp_mqtt_client_publish(client_, configTopic, buf, 0, 1, 1);
+    }
+
+    // ── Reboot button ────────────────────────────────────────
+
+    {
+        char configTopic[192];
+        snprintf(configTopic, sizeof(configTopic),
+                 "homeassistant/button/%s/reboot/config", deviceId_);
+
+        char cmdTopic[128];
+        snprintf(cmdTopic, sizeof(cmdTopic), "%s/set/reboot", baseTopic_);
+
+        char buf[512];
+        BufferStream stream(buf, sizeof(buf));
+        JsonWriter json(stream);
+
+        json.beginObject();
+
+        json.field("name", "Reboot");
+
+        char uid[64];
+        snprintf(uid, sizeof(uid), "dps50xx_%s_reboot", deviceId_);
+        json.field("uniq_id", uid);
+
+        json.field("cmd_t", cmdTopic);
+        json.field("dev_cla", "restart");
+        json.field("ent_cat", "config");
+        json.field("avty_t", availTopic);
+
+        WriteDeviceBlock(json, deviceId_, deviceName, app->version);
+
+        json.endObject();
+
+        esp_mqtt_client_publish(client_, configTopic, buf, 0, 1, 1);
+    }
+
+    // ── Registered discovery callbacks ───────────────────────
+
+    for (int i = 0; i < discoveryCallbackCount_; i++)
+        discoveryCallbacks_[i]();
+
+    ESP_LOGI(TAG, "Home Assistant discovery published");
+}
