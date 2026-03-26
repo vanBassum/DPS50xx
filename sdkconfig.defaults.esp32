@@ -1,0 +1,2 @@
+# ESP32 target-specific defaults
+CONFIG_IDF_TARGET="esp32"

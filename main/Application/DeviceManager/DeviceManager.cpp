@@ -17,14 +17,14 @@ void DeviceManager::Init()
         return;
     }
 
-    rtuClient_.Init(UART_TX_PIN, UART_RX_PIN, UART_BAUD);
+    rtuClient_.Init(MODBUS_TX_PIN, MODBUS_RX_PIN, MODBUS_BAUD);
 
     pollTask_.Init("dev_poll", 4, 4096);
     pollTask_.SetHandler([this]() { PollLoop(); });
     pollTask_.Run();
 
     ESP_LOGI(TAG, "DeviceManager initialized (TX=%d, RX=%d, baud=%lu)",
-             UART_TX_PIN, UART_RX_PIN, (unsigned long)UART_BAUD);
+             MODBUS_TX_PIN, MODBUS_RX_PIN, (unsigned long)MODBUS_BAUD);
 
     initAttempt.SetReady();
 }

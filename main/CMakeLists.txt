@@ -40,6 +40,7 @@ set(INCLUDE_DIRS_LIST
     "lib/rtos"
     "lib/json"
     "lib/system"
+    "hardware"
 )
 
 set(COMPONENT_REQUIRES
