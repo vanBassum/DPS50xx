@@ -159,11 +159,17 @@ RequestError PsuManager::Cmd_Set(CommandContext& ctx)
         return RequestError::Ok;
     };
 
-    if (voltage < 0.0f || voltage > MAX_VOLTAGE)
+    // Only what the caller actually CHANGED is validated. An omitted argument
+    // still holds the supply's own value, and the supply's own value can sit
+    // outside these limits — the front panel set 20.1 A on the unit this was
+    // first tested against. Validating those too meant one `psu set -voltage 6`
+    // came back "current out of range" about a current the caller never
+    // mentioned and could not fix through this command.
+    if (voltage != d.setVoltage && (voltage < 0.0f || voltage > MAX_VOLTAGE))
         return refuse("voltage out of range (0-50 V)");
-    if (current < 0.0f || current > MAX_CURRENT)
+    if (current != d.setCurrent && (current < 0.0f || current > MAX_CURRENT))
         return refuse("current out of range (0-20 A)");
-    if (backlight > MAX_BACKLIGHT)
+    if (backlight != d.backlight && backlight > MAX_BACKLIGHT)
         return refuse("backlight out of range (0-5)");
 
     // Apply in an order that cannot brown-out a load: the limits move before the

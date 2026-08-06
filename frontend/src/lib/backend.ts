@@ -504,8 +504,8 @@ class BackendService {
     return true
   }
 
-  /** Upload a .bin as one streamed `writePartition` session: an envelope chunk
-   *  ({"type":"writePartition","partition":...}\n) followed by body chunks, the
+  /** Upload a .bin as one streamed `partition write` session: an envelope chunk
+   *  ({"type":"partition write","partition":...}\n) followed by body chunks, the
    *  last carrying FLAG_FINAL. The device drains it straight to flash and replies
    *  once, at end-of-stream. Runs through the open queue, so nothing else touches
    *  the socket mid-upload (the device would REJECT an interleaved session id). */
@@ -540,7 +540,12 @@ class BackendService {
       })
 
       // Envelope chunk (not FINAL — the body follows on the same session id).
-      const envelope = new TextEncoder().encode(JSON.stringify({ type: "writePartition", partition }) + "\n")
+      // Two-part route, like every other command — the dispatcher splits `type`
+      // on the space and refuses anything else with "expected: <category>
+      // <command>". `writePartition` here was inherited from Strux and made
+      // every firmware upload from the UI fail; the neighbouring `partition
+      // clear`/`activate` calls always had it right, which is what hid it.
+      const envelope = new TextEncoder().encode(JSON.stringify({ type: "partition write", partition }) + "\n")
       this.sendChunk(session, 0, envelope)
 
       // Body chunks. CHUNK matches the device's inbound window (see WebSocketHandler).
