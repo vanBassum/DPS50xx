@@ -60,20 +60,22 @@ void NetworkManager::Init()
     // Setup connect timeout timer
     connectTimer_.Init("sta_timeout", pdMS_TO_TICKS(StaConnectTimeoutMs), false);
     connectTimer_.SetHandler([this]() {
-        if (!staConnected_)
-        {
-            staRetryCount_++;
-            ESP_LOGW(TAG, "STA connect timeout (attempt %d/%d)", staRetryCount_.load(), MaxStaRetries);
+        if (staConnected_)
+            return;
 
-            if (staRetryCount_ >= MaxStaRetries)
-            {
-                FallbackToAP();
-            }
-            else
-            {
-                AttemptStaConnect();
-            }
-        }
+        staRetryCount_++;
+
+        // Say why once, then go quiet and count. Ipv4Acquired reports the total.
+        if (!staOutageLogged_.exchange(true))
+            ESP_LOGW(TAG, "'%s' did not answer; retrying every %d s for as long as "
+                          "this device is powered", staSsid_, StaConnectTimeoutMs / 1000);
+
+        // No retry limit and no AP fallback: an absent network is a condition
+        // that time fixes, and tearing the station down was unrecoverable
+        // without a reboot. A fixed cadence rather than a backoff because this
+        // is an association with a local access point, not a dial-out to a
+        // server that could be overwhelmed by it.
+        AttemptStaConnect();
     });
 
     strux_.getCommandManager().Register(this, commands_);
@@ -118,8 +120,10 @@ void NetworkManager::AttemptStaConnect()
         return;
     }
 
-    ESP_LOGI(TAG, "Attempting STA connection to '%s' (attempt %d/%d)",
-             staSsid_, staRetryCount_.load() + 1, MaxStaRetries);
+    // Only the first attempt of an outage announces itself; the rest are the
+    // retry loop, which the timer handler has already accounted for.
+    if (staRetryCount_ == 0)
+        ESP_LOGI(TAG, "Attempting STA connection to '%s'", staSsid_);
 
     wifi_interface_.Stop();
     staConnected_ = false;
@@ -158,9 +162,11 @@ void NetworkManager::HandleNetworkEvent(const NetworkEvent& event)
 
             if (staConnected_)
             {
-                // Was connected, lost connection — try to reconnect
+                // Was connected, lost connection — try to reconnect. A fresh
+                // outage, so it gets to explain itself once more.
                 staConnected_ = false;
                 staRetryCount_ = 0;
+                staOutageLogged_ = false;
                 ESP_LOGI(TAG, "Lost connection, attempting reconnect");
                 esp_wifi_connect();
                 connectTimer_.Start();
@@ -171,9 +177,18 @@ void NetworkManager::HandleNetworkEvent(const NetworkEvent& event)
 
     case NetworkEventType::Ipv4Acquired:
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&event.status.ipv4.ip));
+
+        // The one place the retry count is worth saying out loud: how long the
+        // network was gone, in a single line, to somebody arriving late.
+        if (staRetryCount_ > 0)
+            ESP_LOGI(TAG, "Reconnected to '%s' after %d attempts (~%d s)",
+                     staSsid_, staRetryCount_.load() + 1,
+                     (staRetryCount_.load() * StaConnectTimeoutMs) / 1000);
+
         connectTimer_.Stop();
         staConnected_ = true;
         staRetryCount_ = 0;
+        staOutageLogged_ = false;
         break;
 
     case NetworkEventType::Ipv4Lost:

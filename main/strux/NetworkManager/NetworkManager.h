@@ -14,9 +14,18 @@ class Stream;
 
 class NetworkManager {
     static constexpr const char* TAG = "NetworkManager";
+    /// How long one connect attempt is given before it is retried. There is no
+    /// retry LIMIT: a device holding credentials that worked once keeps trying
+    /// for as long as it is powered. See the note on AP fallback below.
     static constexpr int StaConnectTimeoutMs = 10000;
-    static constexpr int MaxStaRetries = 3;
 
+    // The AP is for a device that has never been told which network to join —
+    // provisioning, not recovery. It is deliberately NOT reachable from the
+    // retry path: falling back to it because the configured network was briefly
+    // absent tore down the station for good (nothing here re-enters STA without
+    // a reboot), so an access point rebooting stranded the device until someone
+    // power-cycled it. A missing network is a condition time fixes; wrong
+    // credentials are not, and only the second is worth an AP.
     static constexpr const char* DefaultApSsid = "Strux-AP";
     static constexpr const char* DefaultApPassword = ""; // Open network
 
@@ -55,6 +64,13 @@ private:
     char staPassword_[65] = {};
     std::atomic<int> staRetryCount_{0};
     std::atomic<bool> staConnected_{false};
+
+    /// Whether the current outage has already been explained. A retry loop that
+    /// runs for the lifetime of the device turns "one line per failure" into one
+    /// line every ten seconds, forever — so the reason is logged once and the
+    /// repeats are counted, reported by the connect that finally succeeds.
+    /// See docs/reasoning/2026-08-05-22h33.
+    std::atomic<bool> staOutageLogged_{false};
 
     Timer connectTimer_;
 
