@@ -1,6 +1,7 @@
-## IDF Component Manager Manifest File
 dependencies:
   idf:
-    version: '>=5.0.0'
+    version: ">=5.0.0"
   espressif/mdns: ^1
-  espressif/mqtt: "^1"
+# esp_websocket_client is deliberately absent: the relay drives a WebSocket through
+# the built-in tcp_transport layer instead, so the reading happens on the task that
+# runs the command. See Application/RelayManager/RelaySocket.h.

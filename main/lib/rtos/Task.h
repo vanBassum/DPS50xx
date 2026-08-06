@@ -53,15 +53,22 @@ public:
 		this->callback = std::move(callback);
 	}
 
-	bool Run()
+	bool Run(BaseType_t core = tskNO_AFFINITY)
 	{
 		DeleteTaskIfExists();
-		BaseType_t result = xTaskCreate(&TaskFunction, name, stackDepth, this, priority, &taskHandle);
+		BaseType_t result;
+		if (core == tskNO_AFFINITY) {
+			result = xTaskCreate(&TaskFunction, name, stackDepth, this, priority, &taskHandle);
+		} else {
+			result = xTaskCreatePinnedToCore(&TaskFunction, name, stackDepth, this, priority, &taskHandle, core);
+		}
 		if (result != pdPASS) {
 			taskHandle = nullptr;
 		}
 		return result == pdPASS;
 	}
+
+#ifdef configUSE_TASK_NOTIFICATIONS
 
 	bool NotifyWait(uint32_t* pulNotificationValue, TickType_t timeout = portMAX_DELAY)
 	{
@@ -84,5 +91,12 @@ public:
 	{
 		if (taskHandle == nullptr) return false;
 		return xTaskNotifyFromISR(taskHandle, bits, eSetBits, pxHigherPriorityTaskWoken) == pdPASS;
+	}
+
+#endif // configUSE_TASK_NOTIFICATIONS
+
+	static int GetCurrentCoreID()
+	{
+		return xPortGetCoreID();
 	}
 };

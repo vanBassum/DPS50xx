@@ -1,4 +1,5 @@
-import { HomeIcon, TerminalIcon, SettingsIcon, DownloadIcon } from "lucide-react"
+import { useEffect } from "react"
+import { ZapIcon, CpuIcon, TerminalIcon, SettingsIcon, DownloadIcon } from "lucide-react"
 import {
   Sidebar,
   SidebarContent,
@@ -14,9 +15,15 @@ import { useConnectionStatus } from "@/hooks/use-connection-status"
 import { useDeviceInfo } from "@/hooks/use-device-info"
 import { useLatestRelease } from "@/hooks/use-latest-release"
 import { isNewerVersion } from "@/lib/version"
+import { PreReleaseBadge } from "@/components/PreReleaseBadge"
 
+// "Supply" is the product's own screen and stays the "home" page, so a bookmark
+// to "/" still lands on it. The framework's device-info dashboard moved to
+// "Device" rather than being dropped — it is the first place to look when the
+// supply is fine but the board is not.
 const navItems = [
-  { title: "Home", icon: HomeIcon, page: "home" as const },
+  { title: "Supply", icon: ZapIcon, page: "home" as const },
+  { title: "Device", icon: CpuIcon, page: "device" as const },
   { title: "Console", icon: TerminalIcon, page: "console" as const },
   { title: "Settings", icon: SettingsIcon, page: "settings" as const },
   { title: "Firmware", icon: DownloadIcon, page: "firmware" as const },
@@ -47,10 +54,18 @@ export function AppSidebar({ currentPage, onNavigate }: AppSidebarProps) {
   const release = useLatestRelease()
   const updateAvailable = info && release && isNewerVersion(info.firmware, release.version)
 
+  // Browser tab title follows the device name (login page covers pre-auth).
+  useEffect(() => {
+    if (info?.name) document.title = info.name
+  }, [info?.name])
+
   return (
     <Sidebar>
       <SidebarHeader className="px-4 py-3">
-        <span className="text-sm font-semibold">DPS50xx</span>
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-semibold">{info?.name ?? "…"}</span>
+          <PreReleaseBadge version={info?.firmware} />
+        </div>
       </SidebarHeader>
       <SidebarContent>
         <SidebarGroup>
@@ -75,13 +90,15 @@ export function AppSidebar({ currentPage, onNavigate }: AppSidebarProps) {
         </SidebarGroup>
       </SidebarContent>
       <SidebarFooter className="p-3">
-        <div className="rounded-lg border bg-card p-3 text-xs space-y-1.5">
+        <div className="rounded-lg border bg-card p-3 text-xs">
           {info && (
-            <>
-              <FooterRow label="Firmware" value={info.firmware} mono />
-              <FooterRow label="ESP-IDF" value={info.idf} mono />
-              <FooterRow label="Chip" value={info.chip} mono />
-            </>
+            <div className="mb-1.5 flex items-center justify-between">
+              <span className="text-muted-foreground">Version</span>
+              <div className="flex items-center gap-1.5">
+                <PreReleaseBadge version={info.firmware} />
+                <span className="font-mono">{info.firmware}</span>
+              </div>
+            </div>
           )}
           <div className="flex items-center justify-between">
             <span className="text-muted-foreground">Status</span>
@@ -93,14 +110,5 @@ export function AppSidebar({ currentPage, onNavigate }: AppSidebarProps) {
         </div>
       </SidebarFooter>
     </Sidebar>
-  )
-}
-
-function FooterRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
-  return (
-    <div className="flex items-center justify-between">
-      <span className="text-muted-foreground">{label}</span>
-      <span className={mono ? "font-mono" : ""}>{value}</span>
-    </div>
   )
 }

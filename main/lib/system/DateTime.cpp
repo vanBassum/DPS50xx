@@ -1,7 +1,6 @@
 #include "DateTime.h"
 #include <ctime>
 #include <cstring>
-#include <string>
 #include <cstdio>
 #include "esp_log.h"
 #include <limits>
@@ -22,7 +21,6 @@ DateTime DateTime::FromUtc(std::time_t secondsSinceEpoch) {
     return DateTime(secondsSinceEpoch);
 }
 
-
 DateTime DateTime::FromLocal(const std::tm& localTm) {
     std::tm tmp = localTm;
     return DateTime(mktime(&tmp));
@@ -31,7 +29,7 @@ DateTime DateTime::FromLocal(const std::tm& localTm) {
 bool DateTime::FromStringLocal(DateTime& result, const char* str, const char* format) {
     std::tm t = {};
     if (strptime(str, format, &t) == nullptr) {
-        ESP_LOGE(TAG, "Couln't convert to datetime '%s', format '%s'", str, format );
+        ESP_LOGE(TAG, "Couldn't convert to datetime '%s', format '%s'", str, format);
         return false;
     }
     result = DateTime(mktime(&t));
@@ -47,23 +45,6 @@ DateTime DateTime::MaxValue()
 {
     return DateTime(std::numeric_limits<std::time_t>::max());
 }
-
-#ifdef TIMEGM_FUNCTION
-DateTime DateTime::FromUtc(const std::tm& utcTm) {
-    std::tm tmp = utcTm;  // timegm() may modify the tm struct
-    return DateTime(TIMEGM_FUNCTION(&tmp));
-}
-
-DateTime DateTime::FromStringUtc(const std::string& str, const std::string& format) {
-    std::tm t = {};
-    if (strptime(str.c_str(), format.c_str(), &t) == nullptr) {
-        // Handle parse error as needed; here we return a default DateTime.
-        return DateTime();
-    }
-    return DateTime(TIMEGM_FUNCTION(&t));
-}
-#endif
-
 
 // --- String Conversion ---
 
@@ -111,7 +92,7 @@ int DateTime::MonthLocal() const
 {
     std::tm t;
     localtime_r(&utc, &t);
-    return t.tm_mon + 1;   // tm_mon = 0–11
+    return t.tm_mon + 1;
 }
 
 int DateTime::YearLocal() const
@@ -141,7 +122,6 @@ int DateTime::SecondLocal() const
     localtime_r(&utc, &t);
     return t.tm_sec;
 }
-
 
 // --- Raw Access ---
 

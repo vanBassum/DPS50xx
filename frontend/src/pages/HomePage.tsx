@@ -1,5 +1,6 @@
 import { useState } from "react"
-import { useDPS5020, PROTECTION_LABELS, type HistoryPoint } from "@/hooks/use-dps5020"
+import { usePsu, type HistoryPoint } from "@/hooks/use-psu"
+import { PROTECTION_LABELS } from "@/lib/backend"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { PowerIcon, ZapIcon, LockIcon, UnlockIcon } from "lucide-react"
@@ -16,14 +17,14 @@ import {
 } from "recharts"
 
 export default function HomePage() {
-  const { data, history, setVoltage, setCurrent, setOutput, setKeyLock } = useDPS5020()
+  const { data, history, error, setVoltage, setCurrent, setOutput, setKeyLock } = usePsu()
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <ZapIcon className="size-5 text-muted-foreground" />
-          <h1 className="text-2xl font-bold">DPS5020</h1>
+          <h1 className="text-2xl font-bold">Supply</h1>
         </div>
         {data && (
           <span
@@ -46,19 +47,25 @@ export default function HomePage() {
 
       {data && !data.online && (
         <div className="rounded-xl border border-amber-500/20 bg-card p-8 text-center text-sm text-amber-500">
-          DPS5020 not responding on Modbus. Check wiring and power.
+          DPS50xx not responding on Modbus. Check wiring and power.
+        </div>
+      )}
+
+      {error && (
+        <div className="rounded-lg border border-red-500/20 bg-red-500/5 px-4 py-2.5 text-sm text-red-500">
+          {error}
         </div>
       )}
 
       {data?.online && (
         <div className="grid gap-6 lg:grid-cols-[1fr_1fr]">
-          {/* Left column: readouts, status, controls, device info */}
+          {/* Left column: readouts, status, controls */}
           <div className="space-y-4">
             {/* Live readouts */}
             <div className="grid grid-cols-3 gap-3">
-              <ReadoutCard label="Voltage" value={data.outVoltage} unit="V" color="text-yellow-400" />
-              <ReadoutCard label="Current" value={data.outCurrent} unit="A" color="text-cyan-400" />
-              <ReadoutCard label="Power" value={data.outPower} unit="W" color="text-orange-400" />
+              <ReadoutCard label="Voltage" value={data.outVoltage} unit="V" color="text-yellow-500" />
+              <ReadoutCard label="Current" value={data.outCurrent} unit="A" color="text-cyan-500" />
+              <ReadoutCard label="Power" value={data.outPower} unit="W" color="text-orange-500" />
             </div>
 
             {/* Status bar */}
@@ -127,13 +134,16 @@ export default function HomePage() {
                 </Button>
               </div>
             </div>
-
           </div>
 
           {/* Right column: charts */}
           {history.length > 1 && (
             <div className="space-y-4">
-              <VoltageCurrentChart history={history} setVoltage={data.setVoltage} setCurrent={data.setCurrent} />
+              <VoltageCurrentChart
+                history={history}
+                setVoltage={data.setVoltage}
+                setCurrent={data.setCurrent}
+              />
               <PowerChart history={history} />
             </div>
           )}
@@ -145,10 +155,24 @@ export default function HomePage() {
 
 // ── Charts ───────────────────────────────────────────────────
 
+// Series colours stay literal — a trace's colour is its identity, and these
+// match the readout cards above. Everything structural (grid, ticks, tooltip)
+// comes from the theme's CSS variables so the charts follow light/dark with the
+// rest of the shell instead of being pinned to the old dark-only palette.
+const VOLTAGE_COLOR = "#eab308"
+const CURRENT_COLOR = "#06b6d4"
+const POWER_COLOR = "#f97316"
+
 const chartStyle = {
-  grid: "#333",
-  tooltip: { backgroundColor: "#1a1a1a", border: "1px solid #333", borderRadius: 6 },
-  tick: { fill: "#888", fontSize: 11 },
+  grid: "var(--border)",
+  tooltip: {
+    backgroundColor: "var(--card)",
+    border: "1px solid var(--border)",
+    borderRadius: 6,
+    color: "var(--card-foreground)",
+  },
+  tick: { fill: "var(--muted-foreground)", fontSize: 11 },
+  label: { color: "var(--muted-foreground)" },
 }
 
 function VoltageCurrentChart({
@@ -162,22 +186,17 @@ function VoltageCurrentChart({
 }) {
   return (
     <div className="rounded-xl border bg-card p-4 shadow-sm">
-      <div className="mb-2 text-xs font-medium text-muted-foreground">Voltage & Current</div>
+      <div className="mb-2 text-xs font-medium text-muted-foreground">Voltage &amp; Current</div>
       <ResponsiveContainer width="100%" height={220}>
         <LineChart data={history}>
           <CartesianGrid strokeDasharray="3 3" stroke={chartStyle.grid} />
-          <XAxis
-            dataKey="time"
-            tick={chartStyle.tick}
-            interval="preserveStartEnd"
-            minTickGap={60}
-          />
+          <XAxis dataKey="time" tick={chartStyle.tick} interval="preserveStartEnd" minTickGap={60} />
           <YAxis
             yAxisId="v"
             tick={chartStyle.tick}
             width={40}
             domain={[0, "auto"]}
-            label={{ value: "V", position: "insideTopLeft", fill: "#facc15", fontSize: 11, dy: -10 }}
+            label={{ value: "V", position: "insideTopLeft", fill: VOLTAGE_COLOR, fontSize: 11, dy: -10 }}
           />
           <YAxis
             yAxisId="a"
@@ -185,32 +204,34 @@ function VoltageCurrentChart({
             tick={chartStyle.tick}
             width={40}
             domain={[0, "auto"]}
-            label={{ value: "A", position: "insideTopRight", fill: "#22d3ee", fontSize: 11, dy: -10 }}
+            label={{ value: "A", position: "insideTopRight", fill: CURRENT_COLOR, fontSize: 11, dy: -10 }}
           />
-          <Tooltip contentStyle={chartStyle.tooltip} labelStyle={{ color: "#aaa" }} />
+          <Tooltip contentStyle={chartStyle.tooltip} labelStyle={chartStyle.label} />
           <Legend />
+          {/* The setpoints as dashed references: how far the output is from what
+              was asked for should be readable without comparing two numbers. */}
           <ReferenceLine
             yAxisId="v"
             y={setVoltage}
-            stroke="#facc15"
+            stroke={VOLTAGE_COLOR}
             strokeDasharray="6 3"
             strokeOpacity={0.5}
-            label={{ value: `${setVoltage.toFixed(1)}V`, fill: "#facc15", fontSize: 10, position: "left" }}
+            label={{ value: `${setVoltage.toFixed(1)}V`, fill: VOLTAGE_COLOR, fontSize: 10, position: "left" }}
           />
           <ReferenceLine
             yAxisId="a"
             y={setCurrent}
-            stroke="#22d3ee"
+            stroke={CURRENT_COLOR}
             strokeDasharray="6 3"
             strokeOpacity={0.5}
-            label={{ value: `${setCurrent.toFixed(1)}A`, fill: "#22d3ee", fontSize: 10, position: "right" }}
+            label={{ value: `${setCurrent.toFixed(1)}A`, fill: CURRENT_COLOR, fontSize: 10, position: "right" }}
           />
           <Line
             yAxisId="v"
             type="monotone"
             dataKey="voltage"
             name="Voltage"
-            stroke="#facc15"
+            stroke={VOLTAGE_COLOR}
             strokeWidth={2}
             dot={false}
             isAnimationActive={false}
@@ -220,7 +241,7 @@ function VoltageCurrentChart({
             type="monotone"
             dataKey="current"
             name="Current"
-            stroke="#22d3ee"
+            stroke={CURRENT_COLOR}
             strokeWidth={2}
             dot={false}
             isAnimationActive={false}
@@ -238,24 +259,19 @@ function PowerChart({ history }: { history: HistoryPoint[] }) {
       <ResponsiveContainer width="100%" height={160}>
         <LineChart data={history}>
           <CartesianGrid strokeDasharray="3 3" stroke={chartStyle.grid} />
-          <XAxis
-            dataKey="time"
-            tick={chartStyle.tick}
-            interval="preserveStartEnd"
-            minTickGap={60}
-          />
+          <XAxis dataKey="time" tick={chartStyle.tick} interval="preserveStartEnd" minTickGap={60} />
           <YAxis
             tick={chartStyle.tick}
             width={45}
             domain={[0, "auto"]}
-            label={{ value: "W", position: "insideTopLeft", fill: "#fb923c", fontSize: 11, dy: -10 }}
+            label={{ value: "W", position: "insideTopLeft", fill: POWER_COLOR, fontSize: 11, dy: -10 }}
           />
-          <Tooltip contentStyle={chartStyle.tooltip} labelStyle={{ color: "#aaa" }} />
+          <Tooltip contentStyle={chartStyle.tooltip} labelStyle={chartStyle.label} />
           <Line
             type="monotone"
             dataKey="power"
             name="Power"
-            stroke="#fb923c"
+            stroke={POWER_COLOR}
             strokeWidth={2}
             dot={false}
             isAnimationActive={false}
@@ -368,9 +384,7 @@ function StatusItem({
   return (
     <div className="text-center">
       <div className="text-xs text-muted-foreground">{label}</div>
-      <div
-        className={`font-mono text-sm font-medium ${highlight ? "text-amber-500" : ""}`}
-      >
+      <div className={`font-mono text-sm font-medium ${highlight ? "text-amber-500" : ""}`}>
         {value}
       </div>
     </div>
@@ -380,4 +394,3 @@ function StatusItem({
 function Divider() {
   return <div className="h-8 w-px bg-border" />
 }
-

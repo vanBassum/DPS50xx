@@ -1,0 +1,7 @@
+# Board overlay: DPS50xx controller on an ESP32 DevKit.
+#
+# Overlays the common root sdkconfig.defaults and wins on conflicts — see the
+# SDKCONFIG_DEFAULTS composition in the root CMakeLists.txt. sdkconfig
+# fragments cannot include one another, which is why the list is built there.
+
+CONFIG_IDF_TARGET="esp32"

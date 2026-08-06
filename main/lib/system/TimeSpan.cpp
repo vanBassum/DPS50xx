@@ -102,7 +102,7 @@ bool TimeSpan::FromStringLocal(TimeSpan &result, const char *str, const char *fo
 {
     std::tm t = {};
     if (strptime(str, format, &t) == nullptr) {
-        ESP_LOGE(TAG, "Couln't convert to timespan '%s', format '%s'", str, format );
+        ESP_LOGE(TAG, "Couldn't convert to timespan '%s', format '%s'", str, format);
         return false;
     }
     result = TimeSpan::FromHours(t.tm_hour) + TimeSpan::FromMinutes(t.tm_min) + TimeSpan::FromSeconds(t.tm_sec);

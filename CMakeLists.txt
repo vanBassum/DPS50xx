@@ -17,6 +17,21 @@ else()
     set(PROJECT_VER "0.0.0-dev")
 endif()
 
+# ── Per-board sdkconfig ───────────────────────────────────────
+# Common defaults plus an optional per-board overlay living in the board
+# folder (main/hardware/boards/<board>/sdkconfig.defaults), letting a board
+# change flash size / PSRAM / partitions without touching the shared
+# defaults. sdkconfig fragments cannot include one another, so this list is
+# the composition point: the board file overlays the common one and wins on
+# conflicts. BOARD is the same cache var consumed by main/CMakeLists.txt.
+if(NOT DEFINED BOARD)
+    set(BOARD "dps50xx_esp32")
+endif()
+set(SDKCONFIG_DEFAULTS "sdkconfig.defaults")
+if(EXISTS "${CMAKE_SOURCE_DIR}/main/hardware/boards/${BOARD}/sdkconfig.defaults")
+    list(APPEND SDKCONFIG_DEFAULTS "main/hardware/boards/${BOARD}/sdkconfig.defaults")
+endif()
+
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 # "Trim" the build. Include the minimal set of components, main, and anything it depends on.
 idf_build_set_property(MINIMAL_BUILD ON)
@@ -28,8 +43,12 @@ project(DPS50xx)
 
 find_program(PNPM pnpm)
 if(PNPM)
+    # --no-frozen-lockfile lets package.json edits auto-update the lockfile
+    # (CMake-driven builds shouldn't fail just because a dep was added).
+    # --config.confirm-modules-purge=false skips the interactive prompt that
+    # appears when node_modules is out of sync.
     add_custom_target(frontend_build
-        COMMAND ${PNPM} install
+        COMMAND ${PNPM} install --no-frozen-lockfile --config.confirm-modules-purge=false
         COMMAND ${PNPM} build
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/frontend
         COMMENT "Building frontend (pnpm install && pnpm build)..."

@@ -1,0 +1,32 @@
+#pragma once
+
+// What one application manager may reach for: its peers, the framework beneath it, and
+// the board beneath that. Implemented by AppContext and handed to every app
+// manager at construction — the same shape as StruxProvider one layer down, so a manager
+// still takes exactly one reference and finds everything through it.
+//
+// The two extra accessors are what make this the top layer: getStrux() reaches down to
+// the framework (register a command, read a setting, take a telemetry point) and
+// getBoard() reaches past it to the hardware. Neither points back up, and nothing in
+// Strux or on the BoardContext can see this interface at all.
+//
+// getBoard() returns BoardContext, not BoardProvider, deliberately: that is what keeps
+// the concrete-driver escape hatch reachable, and it is how this product gets at the
+// supply's full API (GetDps()) without a `Psu` role every board would owe.
+
+class BoardContext;
+class StruxProvider;
+class PsuManager;
+
+class AppProvider
+{
+public:
+    /// The framework layer. Everything Strux offers is behind this one call.
+    virtual StruxProvider& getStrux() = 0;
+
+    /// The hardware. Only the application layer has this — see StruxProvider.h for why.
+    virtual BoardContext& getBoard() = 0;
+
+    // ── This application's own managers ──
+    virtual PsuManager& getPsuManager() = 0;
+};

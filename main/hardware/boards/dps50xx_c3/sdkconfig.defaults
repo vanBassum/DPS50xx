@@ -1,0 +1,6 @@
+# Board overlay: DPS50xx controller on an ESP32-C3 SuperMini.
+#
+# Overlays the common root sdkconfig.defaults and wins on conflicts — see the
+# SDKCONFIG_DEFAULTS composition in the root CMakeLists.txt.
+
+CONFIG_IDF_TARGET="esp32c3"

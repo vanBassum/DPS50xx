@@ -47,9 +47,18 @@ jobs:
     needs: build-frontend
     runs-on: ubuntu-latest
 
+    # The matrix is over BOARDS, not chips: a board folder owns its pins and its
+    # CONFIG_IDF_TARGET, so the chip is a consequence of the board rather than a
+    # parallel axis. `target:` is still passed to the CI action because that is
+    # what it installs a toolchain for. Artifacts keep the chip in their name —
+    # that is what someone downloading a factory image is matching against.
     strategy:
       matrix:
-        target: [esp32c3, esp32]
+        include:
+          - board: dps50xx_c3
+            target: esp32c3
+          - board: dps50xx_esp32
+            target: esp32
 
     steps:
       - name: Checkout
@@ -70,8 +79,8 @@ jobs:
           target: ${{ matrix.target }}
           command: |
             set -euo pipefail
-            idf.py set-target ${{ matrix.target }}
-            idf.py build
+            idf.py -DBOARD=${{ matrix.board }} set-target ${{ matrix.target }}
+            idf.py -DBOARD=${{ matrix.board }} build
             cd build && esptool.py --chip ${{ matrix.target }} merge_bin -o merged-factory.bin -f raw @flash_args
 
       - name: Prepare release artifacts
@@ -82,10 +91,10 @@ jobs:
           # Full factory image (bootloader + partition table + all partitions)
           cp build/merged-factory.bin dist/${{ env.PROJECT_NAME }}-${{ matrix.target }}-factory.bin
 
-          # Application-only binary (for OTA update via /api/upload/app)
+          # Application-only binary (OTA via the web UI's firmware page)
           cp build/${{ env.PROJECT_NAME }}.bin dist/${{ env.PROJECT_NAME }}-${{ matrix.target }}-app.bin
 
-          # WWW FAT partition image (for update via /api/upload/www)
+          # WWW FAT partition image (updates the frontend on its own)
           cp build/www.bin dist/${{ env.PROJECT_NAME }}-${{ matrix.target }}-www.bin
 
       - name: Upload firmware artifacts
@@ -114,12 +123,12 @@ jobs:
           body: |
             ### Firmware files
 
-            **ESP32-C3:**
+            **ESP32-C3 SuperMini** (`dps50xx_c3` — Modbus TX 21 / RX 20):
             - **${{ env.PROJECT_NAME }}-esp32c3-factory.bin** — Full factory image. Use for initial flashing via `esptool.py`.
             - **${{ env.PROJECT_NAME }}-esp32c3-app.bin** — Application firmware only. Upload via the web UI for OTA update.
             - **${{ env.PROJECT_NAME }}-esp32c3-www.bin** — Web interface FAT image. Upload via the web UI to update the frontend.
 
-            **ESP32:**
+            **ESP32 DevKit** (`dps50xx_esp32` — Modbus TX 17 / RX 16):
             - **${{ env.PROJECT_NAME }}-esp32-factory.bin** — Full factory image. Use for initial flashing via `esptool.py`.
             - **${{ env.PROJECT_NAME }}-esp32-app.bin** — Application firmware only. Upload via the web UI for OTA update.
             - **${{ env.PROJECT_NAME }}-esp32-www.bin** — Web interface FAT image. Upload via the web UI to update the frontend.

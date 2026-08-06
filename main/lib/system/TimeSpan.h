@@ -6,6 +6,7 @@ class TimeSpan {
 public:
     TimeSpan();
     explicit TimeSpan(long seconds);
+
     // Arithmetic operators
     TimeSpan operator+(const TimeSpan& other) const;
     TimeSpan operator-(const TimeSpan& other) const;

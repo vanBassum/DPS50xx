@@ -62,7 +62,7 @@ inline const char* FindJsonField(const char* json, const char* field)
 
     while (*p)
     {
-        // Skip whitespace
+        // Skip whitespace and structural characters
         while (*p && (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r' || *p == ',' || *p == '{' || *p == '[')) p++;
         if (!*p) break;
 
@@ -73,27 +73,25 @@ inline const char* FindJsonField(const char* json, const char* field)
             const char* keyStart = p;
             while (*p && *p != '"')
             {
-                if (*p == '\\' && *(p + 1)) p++; // skip escaped char
+                if (*p == '\\' && *(p + 1)) p++;
                 p++;
             }
             size_t keyLen = p - keyStart;
-            if (*p == '"') p++; // skip closing quote
+            if (*p == '"') p++;
 
-            // Skip whitespace and colon
             while (*p == ' ' || *p == '\t') p++;
             if (*p == ':')
             {
-                p++; // skip colon
+                p++;
                 while (*p == ' ' || *p == '\t') p++;
 
-                // Check if this key matches
                 if (keyLen == fieldLen && memcmp(keyStart, field, fieldLen) == 0)
-                    return p; // found it — p points to the value
+                    return p;
 
-                // Not our field — skip the value
+                // Skip the value
                 if (*p == '"')
                 {
-                    p++; // skip opening quote of string value
+                    p++;
                     while (*p && *p != '"')
                     {
                         if (*p == '\\' && *(p + 1)) p++;
@@ -103,7 +101,6 @@ inline const char* FindJsonField(const char* json, const char* field)
                 }
                 else if (*p == '{' || *p == '[')
                 {
-                    // Skip nested object/array by counting braces
                     char open = *p, close = (*p == '{') ? '}' : ']';
                     int depth = 1;
                     p++;
@@ -117,14 +114,12 @@ inline const char* FindJsonField(const char* json, const char* field)
                 }
                 else
                 {
-                    // Skip number, bool, null
                     while (*p && *p != ',' && *p != '}' && *p != ']') p++;
                 }
             }
         }
         else
         {
-            // Skip any other character (closing braces, etc.)
             p++;
         }
     }
@@ -140,7 +135,7 @@ inline bool ExtractJsonString(const char* json, const char* field, char* out, si
     size_t i = 0;
     while (*val && *val != '"' && i < outSize - 1)
     {
-        if (*val == '\\' && *(val + 1)) val++; // skip escape
+        if (*val == '\\' && *(val + 1)) val++;
         out[i++] = *val++;
     }
     out[i] = '\0';
