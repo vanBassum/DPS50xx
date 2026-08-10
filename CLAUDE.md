@@ -25,6 +25,16 @@ idf.py build                          # also builds the frontend if pnpm is inst
 idf.py -p <PORT> flash monitor
 ```
 
+**The ESP32 test unit does not enter download mode on its own** — RTS resets the chip but
+DTR never reaches IO0, so `flash` fails with `Wrong boot mode detected (0x13)` no matter
+how the reset is timed. Hold the BOOT button while flashing, and pass
+`--connect-attempts 0` so esptool keeps retrying the reset until the button is down:
+
+```bash
+python -m esptool --chip esp32 -p <PORT> -b 460800 --connect-attempts 0 \
+    write-flash "@flash_args"     # run from build/
+```
+
 The board is a build-time choice; pass it to *every* `idf.py` invocation, including `set-target`, because the board folder is what carries `CONFIG_IDF_TARGET`:
 
 ```bash

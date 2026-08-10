@@ -10,6 +10,31 @@
 
 static WiFiInterface* s_instance = nullptr;
 
+// The wifi_err_reason_t values worth telling apart at a glance. Not all of them:
+// esp_wifi has around fifty, most of them 802.11 status codes an ESP32 station
+// never provokes, and a table of those would bury the four that answer the only
+// question being asked — is this the network, the password, or the radio?
+static const char* DisconnectReasonName(uint8_t reason)
+{
+    switch (reason)
+    {
+    case WIFI_REASON_AUTH_EXPIRE:             return "auth expired";
+    case WIFI_REASON_AUTH_LEAVE:              return "AP said leave";
+    case WIFI_REASON_DISASSOC_DUE_TO_INACTIVITY: return "AP saw us as idle";
+    case WIFI_REASON_ASSOC_TOOMANY:           return "AP full";
+    case WIFI_REASON_ASSOC_NOT_AUTHED:        return "associated but not authenticated";
+    case WIFI_REASON_ASSOC_LEAVE:             return "we left";
+    case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT:  return "wrong password";
+    case WIFI_REASON_BEACON_TIMEOUT:          return "beacon timeout, AP gone";
+    case WIFI_REASON_NO_AP_FOUND:             return "no such network in range";
+    case WIFI_REASON_AUTH_FAIL:               return "auth rejected";
+    case WIFI_REASON_ASSOC_FAIL:              return "assoc rejected";
+    case WIFI_REASON_HANDSHAKE_TIMEOUT:       return "handshake timeout";
+    case WIFI_REASON_CONNECTION_FAIL:         return "connection failed";
+    default:                                  return "see wifi_err_reason_t";
+    }
+}
+
 void WiFiInterface::Init()
 {
     s_instance = this;
@@ -182,9 +207,18 @@ void WiFiInterface::OnWifiEvent(esp_event_base_t event_base, int32_t event_id, v
             break;
 
         case WIFI_EVENT_STA_DISCONNECTED:
-            ESP_LOGW(TAG, "STA disconnected");
+        {
+            // The reason code is the difference between "that network is not on the
+            // air" and "that password is wrong" — between a failure waiting fixes
+            // and one it never will. Dropping event_data made every failed
+            // association read identically from the log, which is a poor place to
+            // be when a device will not associate and the log is all there is.
+            auto* event = static_cast<wifi_event_sta_disconnected_t*>(event_data);
+            ESP_LOGW(TAG, "STA disconnected: %s (reason %d)",
+                     DisconnectReasonName(event->reason), event->reason);
             RaiseEvent(NetworkEventType::LinkDown);
             break;
+        }
 
         case WIFI_EVENT_AP_START:
             ESP_LOGI(TAG, "AP started");

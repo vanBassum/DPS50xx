@@ -1,4 +1,8 @@
 #include "NetworkManager.h"
+
+#include <cstdio>
+#include <cstring>
+
 #include "SettingsManager.h"
 #include "SystemManager.h"
 #include "CommandManager.h"
@@ -57,26 +61,9 @@ void NetworkManager::Init()
     mdns_instance_name_set(deviceName);
     mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
 
-    // Setup connect timeout timer
-    connectTimer_.Init("sta_timeout", pdMS_TO_TICKS(StaConnectTimeoutMs), false);
-    connectTimer_.SetHandler([this]() {
-        if (staConnected_)
-            return;
-
-        staRetryCount_++;
-
-        // Say why once, then go quiet and count. Ipv4Acquired reports the total.
-        if (!staOutageLogged_.exchange(true))
-            ESP_LOGW(TAG, "'%s' did not answer; retrying every %d s for as long as "
-                          "this device is powered", staSsid_, StaConnectTimeoutMs / 1000);
-
-        // No retry limit and no AP fallback: an absent network is a condition
-        // that time fixes, and tearing the station down was unrecoverable
-        // without a reboot. A fixed cadence rather than a backoff because this
-        // is an association with a local access point, not a dial-out to a
-        // server that could be overwhelmed by it.
-        AttemptStaConnect();
-    });
+    // One timer drives the whole cycle — see OnCycleTimer.
+    connectTimer_.Init("net_cycle", pdMS_TO_TICKS(StaConnectTimeoutMs), false);
+    connectTimer_.SetHandler([this]() { OnCycleTimer(); });
 
     strux_.getCommandManager().Register(this, commands_);
     strux_.getSettingsManager().Register({ &wifiSsid_, &wifiPassword_ });
@@ -84,19 +71,9 @@ void NetworkManager::Init()
     initAttempt.SetReady();
     ESP_LOGI(TAG, "Initialized");
 
-    // Load WiFi credentials from settings and try to connect
-    wifiSsid_.Get(staSsid_, sizeof(staSsid_));
-    wifiPassword_.Get(staPassword_, sizeof(staPassword_));
-
-    if (staSsid_[0] != '\0')
-    {
-        AttemptStaConnect();
-    }
-    else
-    {
-        ESP_LOGI(TAG, "No WiFi SSID configured, starting AP");
-        FallbackToAP();
-    }
+    // Credentials are read by the station round rather than here, because the round
+    // re-reads them every time and there is no first-time case left to special-case.
+    BeginStaRound();
 }
 
 WiFiInterface& NetworkManager::wifi()
@@ -111,33 +88,136 @@ const WiFiInterface& NetworkManager::wifi() const
     return wifi_interface_;
 }
 
+void NetworkManager::OnCycleTimer()
+{
+    // An expiring AP window is the one tick that is not a failed attempt. On an
+    // unprovisioned device it is not even that — see StartProvisioningAp, where the
+    // same tick is how credentials that arrive through the AP get noticed.
+    if (apWindowOpen_)
+    {
+        if (staSsid_[0] != '\0')
+            ESP_LOGI(TAG, "AP window over, trying '%s' again", staSsid_);
+        BeginStaRound();
+        return;
+    }
+
+    if (staConnected_)
+        return;
+
+    staRoundAttempts_++;
+    staOutageAttempts_++;
+
+    // Say why once per outage, then go quiet and count: this loop runs for the life
+    // of the device, so one line per failure is one line forever. Ipv4Acquired
+    // reports the total. See docs/reasoning/2026-08-05-22h33.
+    if (!staOutageLogged_.exchange(true))
+        ESP_LOGW(TAG, "'%s' did not answer; alternating %d attempts with a %d min "
+                      "AP window for as long as this device is powered",
+                 staSsid_, StaAttemptsPerRound, ApWindowMs / 60000);
+
+    if (staRoundAttempts_ >= StaAttemptsPerRound)
+    {
+        OpenApWindow();
+        return;
+    }
+
+    // A flat cadence rather than a backoff: this is an association with a local
+    // access point, not a dial-out to a server a retry loop could overwhelm.
+    AttemptStaConnect();
+}
+
+void NetworkManager::BeginStaRound()
+{
+    // Re-read the credentials, so the network provisioned through the AP window is
+    // the one this round tries. Nothing else re-reads them, and before the cycle
+    // existed there was no second round to re-read them for.
+    char prevSsid[sizeof(staSsid_)];
+    char prevPassword[sizeof(staPassword_)];
+    snprintf(prevSsid, sizeof(prevSsid), "%s", staSsid_);
+    snprintf(prevPassword, sizeof(prevPassword), "%s", staPassword_);
+
+    wifiSsid_.Get(staSsid_, sizeof(staSsid_));
+    wifiPassword_.Get(staPassword_, sizeof(staPassword_));
+
+    if (strcmp(prevSsid, staSsid_) != 0 || strcmp(prevPassword, staPassword_) != 0)
+    {
+        // New credentials are a new problem. Counting their failures into the
+        // outage the old ones caused would hide the one line worth reading — that
+        // what was just entered does not work either.
+        staOutageAttempts_ = 0;
+        staOutageLogged_ = false;
+        staOutageStartTick_ = xTaskGetTickCount();
+    }
+
+    if (staSsid_[0] == '\0')
+    {
+        StartProvisioningAp();
+        return;
+    }
+
+    staRoundAttempts_ = 0;
+    AttemptStaConnect();
+}
+
 void NetworkManager::AttemptStaConnect()
 {
     if (staSsid_[0] == '\0')
     {
-        ESP_LOGW(TAG, "No STA credentials configured, starting AP");
-        FallbackToAP();
+        StartProvisioningAp();
         return;
     }
 
-    // Only the first attempt of an outage announces itself; the rest are the
-    // retry loop, which the timer handler has already accounted for.
-    if (staRetryCount_ == 0)
+    // Only the first attempt of an outage announces itself; the rest are the cycle,
+    // which OnCycleTimer has already accounted for.
+    if (staOutageAttempts_ == 0)
         ESP_LOGI(TAG, "Attempting STA connection to '%s'", staSsid_);
 
+    apWindowOpen_ = false;
     wifi_interface_.Stop();
     staConnected_ = false;
     wifi_interface_.ConnectSta(staSsid_, staPassword_);
+    connectTimer_.SetPeriod(pdMS_TO_TICKS(StaConnectTimeoutMs));
     connectTimer_.Start();
 }
 
-void NetworkManager::FallbackToAP()
+void NetworkManager::OpenApWindow()
 {
+    // Set before the station goes down, not after: Stop() raises a disconnect that
+    // arrives on the event task whenever it arrives, and this flag is the only
+    // thing that stops it being read as one more failed attempt.
+    apWindowOpen_ = true;
+
     connectTimer_.Stop();
     wifi_interface_.Stop();
 
-    ESP_LOGW(TAG, "Falling back to AP mode: '%s'", DefaultApSsid);
+    ESP_LOGW(TAG, "'%s' unreachable after %d attempts, opening '%s' for %d min",
+             staSsid_, StaAttemptsPerRound, DefaultApSsid, ApWindowMs / 60000);
     wifi_interface_.StartAP(DefaultApSsid, DefaultApPassword);
+
+    connectTimer_.SetPeriod(pdMS_TO_TICKS(ApWindowMs));
+    connectTimer_.Start();
+}
+
+void NetworkManager::StartProvisioningAp()
+{
+    // There is nothing for a station round to try, so this window ends only when
+    // BeginStaRound re-reads the settings and finds a network in them. That is what
+    // makes provisioning through this AP take effect on its own; the poll is short
+    // because the person who just pressed Save is standing there.
+    //
+    // The radio is left alone when the AP is already up: that same person may be
+    // part-way through typing, and bouncing it under them loses the page.
+    apWindowOpen_ = true;
+
+    if (!wifi_interface_.IsAP())
+    {
+        wifi_interface_.Stop();
+        ESP_LOGI(TAG, "No WiFi network configured, starting AP '%s'", DefaultApSsid);
+        wifi_interface_.StartAP(DefaultApSsid, DefaultApPassword);
+    }
+
+    connectTimer_.SetPeriod(pdMS_TO_TICKS(ProvisioningPollMs));
+    connectTimer_.Start();
 }
 
 void NetworkManager::HandleNetworkEvent(const NetworkEvent& event)
@@ -156,38 +236,48 @@ void NetworkManager::HandleNetworkEvent(const NetworkEvent& event)
         break;
 
     case NetworkEventType::LinkDown:
-        if (!wifi_interface_.IsAP())
+        // apWindowOpen_ covers the disconnect this manager caused itself by taking
+        // the station down to open the window: it is not news, and acting on it
+        // would count the teardown as a failed attempt.
+        if (!wifi_interface_.IsAP() && !apWindowOpen_)
         {
             ESP_LOGW(TAG, "STA disconnected");
 
             if (staConnected_)
             {
-                // Was connected, lost connection — try to reconnect. A fresh
-                // outage, so it gets to explain itself once more.
+                // Was connected, lost the link — a fresh outage, so it gets to
+                // explain itself once more and starts its own round of attempts.
                 staConnected_ = false;
-                staRetryCount_ = 0;
+                staRoundAttempts_ = 0;
+                staOutageAttempts_ = 0;
                 staOutageLogged_ = false;
+                staOutageStartTick_ = xTaskGetTickCount();
                 ESP_LOGI(TAG, "Lost connection, attempting reconnect");
                 esp_wifi_connect();
+                connectTimer_.SetPeriod(pdMS_TO_TICKS(StaConnectTimeoutMs));
                 connectTimer_.Start();
             }
-            // If not yet connected, the timeout timer handles retries
+            // If not yet connected, the cycle timer handles retries
         }
         break;
 
     case NetworkEventType::Ipv4Acquired:
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&event.status.ipv4.ip));
 
-        // The one place the retry count is worth saying out loud: how long the
-        // network was gone, in a single line, to somebody arriving late.
-        if (staRetryCount_ > 0)
-            ESP_LOGI(TAG, "Reconnected to '%s' after %d attempts (~%d s)",
-                     staSsid_, staRetryCount_.load() + 1,
-                     (staRetryCount_.load() * StaConnectTimeoutMs) / 1000);
+        // The one place the attempt count is worth saying out loud: how long the
+        // network was gone, in a single line, to somebody arriving late. Measured
+        // rather than derived, because AP windows sit between the attempts.
+        if (staOutageAttempts_ > 0)
+            ESP_LOGI(TAG, "Reconnected to '%s' after %d attempts (~%u s down)",
+                     staSsid_, staOutageAttempts_.load() + 1,
+                     static_cast<unsigned>(
+                         pdTICKS_TO_MS(xTaskGetTickCount() - staOutageStartTick_) / 1000));
 
         connectTimer_.Stop();
+        apWindowOpen_ = false;
         staConnected_ = true;
-        staRetryCount_ = 0;
+        staRoundAttempts_ = 0;
+        staOutageAttempts_ = 0;
         staOutageLogged_ = false;
         break;
 
