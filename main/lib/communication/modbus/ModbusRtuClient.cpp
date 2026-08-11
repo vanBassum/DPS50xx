@@ -57,7 +57,7 @@ void ModbusRtuClient::Init(int txPin, int rxPin, uint32_t baud, uart_port_t port
 // -------------------------
 // ReadExact: read exactly `count` bytes, retrying until timeout
 // -------------------------
-bool ModbusRtuClient::ReadExact(uint8_t *buf, int count, TickType_t timeout)
+bool ModbusRtuClient::ReadExact(uint8_t *buf, int count, TickType_t timeout, int *received)
 {
     int total = 0;
     TickType_t start = xTaskGetTickCount();
@@ -66,15 +66,70 @@ bool ModbusRtuClient::ReadExact(uint8_t *buf, int count, TickType_t timeout)
     {
         TickType_t elapsed = xTaskGetTickCount() - start;
         if (elapsed >= timeout)
-            return false;
+            break;
 
         TickType_t remaining = timeout - elapsed;
         int n = uart_read_bytes(port_, buf + total, count - total, remaining);
         if (n <= 0)
-            return false;
+            break;
         total += n;
     }
-    return true;
+
+    // The count travels out even on the failure path, because on the failure path
+    // it is the whole diagnosis: nothing means silence, something means the slave
+    // is talking and this deadline is in the wrong place.
+    if (received)
+        *received = total;
+    return total == count;
+}
+
+// -------------------------
+// Stale bytes: the previous response, arriving too late to be read
+// -------------------------
+void ModbusRtuClient::ReportStaleBytes(size_t buffered, uint8_t unitId)
+{
+    // Bytes sitting in the buffer when a request begins were sent by the slave
+    // after the deadline that was waiting for them. Which case that is decides
+    // everything downstream, and the two look identical once the bytes are gone:
+    // a well-formed frame for our address means the slave answers correctly and
+    // this timeout is simply too short, while garbage means the problem is
+    // electrical (baud, grounding, a half-duplex driver still asserted). Flushing
+    // them unexamined — which is what this did — throws away the one measurement
+    // that tells the two apart, and leaves a log that can only ever say "Timeout".
+    uint8_t stale[64];
+    const size_t want = buffered < sizeof(stale) ? buffered : sizeof(stale);
+    const int n = uart_read_bytes(port_, stale, want, 0);
+    if (n <= 0)
+    {
+        ESP_LOGW(TAG, "RX buffer had %d stale bytes before flush", (int)buffered);
+        return;
+    }
+
+    char hex[3 * 24 + 1];
+    int pos = 0;
+    for (int i = 0; i < n && pos < (int)sizeof(hex) - 4; i++)
+        pos += snprintf(hex + pos, sizeof(hex) - pos, "%02X ", stale[i]);
+
+    // A whole frame is checkable: [unitId][func][...][CRC_lo][CRC_hi].
+    const bool whole = (n >= 4) && ((size_t)n == buffered);
+    if (whole)
+    {
+        const uint16_t recvCrc = (uint16_t)stale[n - 2] | ((uint16_t)stale[n - 1] << 8);
+        if (recvCrc == CalculateCRC(stale, n - 2) && stale[0] == unitId)
+        {
+            ESP_LOGW(TAG, "late reply: a valid %d-byte response for unit %d was already "
+                          "in the buffer — the slave answered after the read gave up, so "
+                          "the timeout is too short, not the bus dead: %s",
+                     n, (int)unitId, hex);
+            return;
+        }
+    }
+
+    ESP_LOGW(TAG, "%d stale bytes before flush, not a valid frame for unit %d "
+                  "(%s%s): %s",
+             (int)buffered, (int)unitId,
+             whole ? "CRC/address mismatch" : "partial",
+             n < (int)buffered ? ", truncated" : "", hex);
 }
 
 // -------------------------
@@ -128,7 +183,7 @@ ModbusError ModbusRtuClient::Execute(uint8_t unitId,
     size_t buffered = 0;
     uart_get_buffered_data_len(port_, &buffered);
     if (buffered > 0)
-        ESP_LOGW(TAG, "RX buffer had %d stale bytes before flush", (int)buffered);
+        ReportStaleBytes(buffered, unitId);
 
     uart_flush_input(port_);
     uart_write_bytes(port_, txFrame, wrPtr);
@@ -146,12 +201,18 @@ ModbusError ModbusRtuClient::Execute(uint8_t unitId,
     // Read response using deterministic frame-size detection
     // -------------------------
     TickType_t rxTimeout = pdMS_TO_TICKS(timeoutMs);
+    const TickType_t rxStart = xTaskGetTickCount();
     int rxPtr = 0;
 
     // Read unitId + function (2 bytes)
-    if (!ReadExact(rxBuffer_, 2, rxTimeout))
+    int got = 0;
+    if (!ReadExact(rxBuffer_, 2, rxTimeout, &got))
     {
-        ESP_LOGW(TAG, "Timeout waiting for response header (0/%d bytes after %dms)", 2, timeoutMs);
+        // The count used to be the literal 0 here, which made a silent bus and a
+        // slave that got one byte out print the same line — and those two failures
+        // have nothing in common. Say what actually arrived.
+        ESP_LOGW(TAG, "Timeout waiting for response header (%d/%d bytes after %dms)",
+                 got, 2, timeoutMs);
         return ModbusError::Timeout;
     }
     rxPtr = 2;
@@ -242,6 +303,13 @@ ModbusError ModbusRtuClient::Execute(uint8_t unitId,
 
     if (func != request.functionCode)
         return ModbusError::InvalidReplyFunctionCode;
+
+    // A reply that only just made the deadline is the same fault as one that just
+    // missed it, and only the second announces itself. Reported once it is past
+    // half the budget — not per transaction, which would be a line per poll forever.
+    const uint32_t elapsedMs = pdTICKS_TO_MS(xTaskGetTickCount() - rxStart);
+    if (elapsedMs > (uint32_t)timeoutMs / 2)
+        ESP_LOGW(TAG, "reply took %ums of a %dms budget", (unsigned)elapsedMs, timeoutMs);
 
     // -------------------------
     // Deserialize PDU (skip unitId, exclude CRC)

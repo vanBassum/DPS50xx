@@ -37,12 +37,13 @@ outage longer than 30 s exercises it.
 unauthenticated console on an open network, which mattered less when the AP was a
 one-way trip. Either set a default or make the recovery AP carry the web password.
 
-**The DPS5020 answers at boot and then stops.** The 2026-08-11 boot log has
-`DPS5020 online (addr=1)` 3.2 s in, and by four minutes every poll was timing out again
-on TX17/RX16 @9600 — `ModbusRtu: Timeout waiting for response header (0/2 bytes)`. So
-the wiring and the address are right and "the supply is dark" is now the wrong
-explanation: something makes it stop answering after it has already answered. Nothing
-about the product is verifiable until that is understood.
+**The DPS5020 is intermittent, and the bench is where to look.** It alternates between
+answering completely and being entirely absent for minutes — a stray
+`RX buffer had 31 stale bytes` is exactly one whole 13-register response, and the
+instrumented driver then measured 48 consecutive polls receiving literally zero bytes.
+Baud, wiring, address and register map are therefore all right; see
+`reasoning/2026-08-11-22h33`. Suspect the supply or a connector, not the firmware.
+Nothing about the product is verifiable until it stays up.
 
 **The C3 board has never been flashed.** `dps50xx_c3` compiles (1.24 MB, 21% free) and
 nothing in it is board-specific beyond `BoardConfig.h`, but the pins are unverified

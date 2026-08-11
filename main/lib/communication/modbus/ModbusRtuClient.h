@@ -15,7 +15,16 @@ public:
 
 private:
     static uint16_t CalculateCRC(const uint8_t *buf, int len);
-    bool ReadExact(uint8_t *buf, int count, TickType_t timeout);
+
+    /// `received` reports how many bytes actually arrived before the deadline —
+    /// the difference between a silent bus and a slave that is answering but not
+    /// being heard, which is the first thing worth knowing about a timeout.
+    bool ReadExact(uint8_t *buf, int count, TickType_t timeout, int *received = nullptr);
+
+    /// Drain and report whatever was in the RX buffer when a request began: it is
+    /// the previous response arriving after its deadline, and it is the only
+    /// evidence that separates a slow slave from a broken wire.
+    void ReportStaleBytes(size_t buffered, uint8_t unitId);
 
     uart_port_t port_ = UART_NUM_1;
     uint8_t rxBuffer_[256];
