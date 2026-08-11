@@ -5,16 +5,20 @@ lands or is dropped — never ticked off in place. Everything else lives in
 `docs/backlog/` (work for later) or `docs/reasoning/` (why things are the way they are).
 If a fact wants to survive, it does not belong in this file.
 
-Last updated 2026-08-10.
+Last updated 2026-08-11.
 
 ## Now
 
-**Three fixes want pushing back to Strux.**
+**Four fixes want pushing back to Strux.**
 
 - `WiFiInterface` logs the disconnect reason by name, and `NetworkManager` alternates
   station rounds with AP windows instead of ending in either — see
   `reasoning/2026-08-10-19h19`. The reason-code line is the one to upstream first: it
   costs nothing and it is what makes the retry policy decidable at all.
+- `NetworkManager::HasIpv4()` became `HasUpstream()`. The AP netif is always
+  192.168.4.1, so the relay's "wait for an address" guard said *go ahead* for the whole
+  of every recovery AP window — see `reasoning/2026-08-11-22h20`. Travels with the AP
+  window it was broken by, so upstream the two together.
 - `lib/protocol/` gained `ArgType::Float`. Additive, four lines across three files, and
   the reply side already had `value(float)` — see `reasoning/2026-08-06-20h47`. Until it
   is upstreamed, a naive copy of `lib/protocol/` from Strux silently breaks `psu set`.
@@ -33,10 +37,12 @@ outage longer than 30 s exercises it.
 unauthenticated console on an open network, which mattered less when the AP was a
 one-way trip. Either set a default or make the recovery AP carry the web password.
 
-**The DPS5020 has not answered since the Strux port was flashed.** Every poll times out
-on TX17/RX16 @9600 — `ModbusRtu: Timeout waiting for response header (0/2 bytes)`. It
-answered on this wiring on 2026-08-06, so the supply is dark or unwired rather than the
-driver being wrong, but nothing about the product is verifiable until it is back.
+**The DPS5020 answers at boot and then stops.** The 2026-08-11 boot log has
+`DPS5020 online (addr=1)` 3.2 s in, and by four minutes every poll was timing out again
+on TX17/RX16 @9600 — `ModbusRtu: Timeout waiting for response header (0/2 bytes)`. So
+the wiring and the address are right and "the supply is dark" is now the wrong
+explanation: something makes it stop answering after it has already answered. Nothing
+about the product is verifiable until that is understood.
 
 **The C3 board has never been flashed.** `dps50xx_c3` compiles (1.24 MB, 21% free) and
 nothing in it is board-specific beyond `BoardConfig.h`, but the pins are unverified

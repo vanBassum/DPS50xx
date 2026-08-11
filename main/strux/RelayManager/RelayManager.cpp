@@ -203,8 +203,11 @@ void RelayManager::TaskLoop()
             // Nothing to dial with yet. This task starts during Init, while WiFi is
             // still associating, so without this every boot spends a connect attempt
             // it cannot win and logs three ERROR lines from the TLS and transport
-            // layers on the way out. Same check covers WiFi dropping later.
-            if (!strux_.getNetworkManager().HasIpv4())
+            // layers on the way out. Same check covers WiFi dropping later, and the
+            // recovery AP windows that now sit between station rounds — during one of
+            // those the device has an address and no route, and every attempt it
+            // spends there is three ERROR lines nobody can act on.
+            if (!strux_.getNetworkManager().HasUpstream())
             {
                 vTaskDelay(pdMS_TO_TICKS(NO_NETWORK_DELAY_MS));
                 continue;

@@ -68,10 +68,16 @@ public:
 
     bool IsAccessPoint() const { return wifi_interface_.IsAP(); }
 
-    /// Is there an address to reach the world with yet? Asked by anything that dials
-    /// OUT (the relay), because attempting it before an address exists produces
-    /// nothing but a failed connection and the log noise of one.
-    bool HasIpv4() const { return wifi_interface_.getStatus().has_ipv4; }
+    /// Is there a route off this device yet? Asked by anything that dials OUT (the
+    /// relay), because attempting it before there is one produces nothing but a failed
+    /// connection and the log noise of one.
+    ///
+    /// Deliberately not "does an interface have an address": the AP netif is always
+    /// 192.168.4.1, so that question answers yes for the whole of a recovery AP window
+    /// — the one stretch of time when there is certainly nowhere to dial. It is the
+    /// station's address that means the world is reachable, which is what
+    /// staConnected_ tracks. See docs/reasoning/2026-08-11-13h05.
+    bool HasUpstream() const { return staConnected_ && !wifi_interface_.IsAP(); }
 
     /// Associated AP's signal strength in dBm. False when there is none to report
     /// (AP mode, or not associated).
