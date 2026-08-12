@@ -25,6 +25,13 @@ public:
     /// Name of a wifi_err_reason_t, for the codes an ESP32 station actually provokes.
     static const char* DisconnectReason(uint8_t reason);
 
+    /// Writes the beacon strength as either "last beacon -83 dBm" or "no beacon
+    /// heard", and returns buf. esp_wifi fills the field with -128 when there was
+    /// nothing to measure, which printed as a number reads as an almost-signal
+    /// rather than as the absence of one — and telling those apart is the whole
+    /// reason the number is in the line.
+    static const char* BeaconStrength(char* buf, size_t len, int8_t rssi);
+
     bool IsAP() const { return isAP_; }
 
     /// Signal strength of the AP this station is associated with, in dBm (negative;

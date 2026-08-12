@@ -35,6 +35,17 @@ const char* WiFiInterface::DisconnectReason(uint8_t reason)
     }
 }
 
+const char* WiFiInterface::BeaconStrength(char* buf, size_t len, int8_t rssi)
+{
+    // -100 rather than exactly -128: anything at or below it is either the filler or
+    // a signal too weak to have carried the frame it is being cited about.
+    if (rssi <= -100)
+        snprintf(buf, len, "no beacon heard");
+    else
+        snprintf(buf, len, "last beacon %d dBm", rssi);
+    return buf;
+}
+
 void WiFiInterface::Init()
 {
     s_instance = this;
@@ -236,8 +247,10 @@ void WiFiInterface::OnWifiEvent(esp_event_base_t event_base, int32_t event_id, v
             // and an AP we can hear but not reach. Both time out the association;
             // -50 dBm and -85 dBm are which is which.
             auto* event = static_cast<wifi_event_sta_disconnected_t*>(event_data);
-            ESP_LOGW(TAG, "STA disconnected: %s (reason %d, last beacon %d dBm)",
-                     DisconnectReason(event->reason), event->reason, event->rssi);
+            char beacon[24];
+            ESP_LOGW(TAG, "STA disconnected: %s (reason %d, %s)",
+                     DisconnectReason(event->reason), event->reason,
+                     BeaconStrength(beacon, sizeof(beacon), event->rssi));
             RaiseEvent(NetworkEventType::LinkDown, event->reason, event->rssi);
             break;
         }

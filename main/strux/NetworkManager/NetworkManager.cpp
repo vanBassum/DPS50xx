@@ -118,12 +118,15 @@ void NetworkManager::OnCycleTimer()
     if (!staOutageLogged_.exchange(true))
     {
         const uint8_t reason = staLastReason_.load();
+        char beacon[24];
         if (reason != 0)
-            ESP_LOGW(TAG, "'%s' not joined: %s (reason %d, last beacon %d dBm); "
-                          "alternating %d attempts with a %d min AP window for as "
-                          "long as this device is powered",
+            ESP_LOGW(TAG, "'%s' not joined: %s (reason %d, %s); alternating %d "
+                          "attempts with a %d min AP window for as long as this "
+                          "device is powered",
                      staSsid_, WiFiInterface::DisconnectReason(reason), reason,
-                     staLastRssi_.load(), StaAttemptsPerRound, ApWindowMs / 60000);
+                     WiFiInterface::BeaconStrength(beacon, sizeof(beacon),
+                                                   staLastRssi_.load()),
+                     StaAttemptsPerRound, ApWindowMs / 60000);
         else
             ESP_LOGW(TAG, "'%s' said nothing at all within %d ms, not even a refusal; "
                           "alternating %d attempts with a %d min AP window for as "

@@ -33,9 +33,17 @@ Last updated 2026-08-11.
   same function always had it right, which is what hid it.
 
 **The AP→STA half of the WiFi cycle is unverified on hardware.** Three attempts then a
-15-minute AP window is confirmed on the ESP32; the window *closing* and the round that
-follows it are not — the device rebooted before its first window elapsed. Next real
-outage longer than 30 s exercises it.
+15-minute AP window is confirmed on the ESP32 — a round now takes 15 s rather than 30,
+since a failed attempt is retried on the failure instead of on the timeout. The window
+*closing* and the round that follows it are still unverified: the device has never been
+left alone for the full fifteen minutes.
+
+**`vanBassumExt` is out of range of the bench, not wedged.** Two attempts in three
+cannot see it at all (reason 201) and the third hears it at −83 dBm — see
+`reasoning/2026-08-12-14h05`, which revises the wedged-extender inference in
+`2026-08-10-19h19`. Point `wifi.ssid` at the main router or move the device; there is no
+firmware fix, and every WiFi log from this bench will keep showing recovery AP windows
+until one of those happens.
 
 **`web.password` is empty, and the AP now recurs by design.** Every outage window puts an
 unauthenticated console on an open network, which mattered less when the AP was a
