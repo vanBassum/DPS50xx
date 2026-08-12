@@ -26,9 +26,21 @@ class NetworkManager {
     /// the same instant. Short, because the round is bounded by attempts, not time.
     static constexpr int StaRetryDelayMs = 2000;
 
-    /// The device alternates forever: StaAttemptsPerRound attempts at the
+    /// How many networks may be configured. Two, because the reason for a second is
+    /// a device that lives within reach of two and cannot be told which one will be
+    /// up — not a list to be managed, which would want a different settings shape
+    /// than one key per field.
+    static constexpr int MaxStaNetworks = 2;
+
+    /// The device alternates forever: StaAttemptsPerRound attempts at each
     /// configured network, then an AP window, then the same again, for as long as
     /// it is powered. Neither half is terminal, and that is the entire design.
+    ///
+    /// The attempts *rotate* between networks rather than exhausting one before
+    /// starting the next, which matters in the case the second network exists for:
+    /// the first being absent. A round that spends three attempts and eight seconds
+    /// establishing that before it tries the network that is actually up has spent
+    /// them for nothing, where rotating reaches it on the second attempt.
     ///
     /// Both terminal versions were wrong in the same way — each assumed it could
     /// tell, from a failed association, which kind of failure it was looking at.
@@ -99,13 +111,31 @@ private:
     WiFiInterface wifi_interface_;
 
     // STA connection state
-    char staSsid_[33] = {};
-    char staPassword_[65] = {};
+    struct StaNetwork {
+        char ssid[33];
+        char password[65];
+    };
+
+    /// The configured networks, compacted: an empty SSID is not a network, so
+    /// staNetworks_[0..staCount_) are all real and a device configured only through
+    /// the second pair of settings is not a device with no network. Re-read at the
+    /// start of every round, which is what lets provisioning take effect without a
+    /// reboot.
+    StaNetwork staNetworks_[MaxStaNetworks] = {};
+    int staCount_ = 0;
+
+    /// Which network the next attempt targets, and which one the last attempt used.
+    /// The pair is what tells "try that again" from "try the other one" — and the
+    /// difference is whether the driver needs a new config or just another connect.
+    std::atomic<int> staIndex_{0};
+    std::atomic<int> staLastIndex_{-1};
+
     std::atomic<bool> staConnected_{false};
 
     /// Attempts in the current round, and across the whole outage. Only the first
-    /// decides anything — when it reaches StaAttemptsPerRound the AP window opens;
-    /// the second exists to be reported, by the connect that finally succeeds.
+    /// decides anything — when it reaches StaAttemptsPerRound per configured network
+    /// the AP window opens; the second exists to be reported, by the connect that
+    /// finally succeeds.
     std::atomic<int> staRoundAttempts_{0};
     std::atomic<int> staOutageAttempts_{0};
 
@@ -144,11 +174,20 @@ private:
     void OnCycleTimer();
     void BeginStaRound();
 
-    /// One attempt at the configured network. `freshRadio` restarts the station from
-    /// scratch, which is what a round beginning needs (the radio may be in AP mode,
-    /// and the credentials may have just changed) and what a retry inside a round
-    /// must not do — see WiFiInterface::ReconnectSta.
+    /// One attempt at staNetworks_[staIndex_]. `freshRadio` restarts the station from
+    /// scratch, which is what a round beginning needs (the radio may be in AP mode)
+    /// and what an attempt inside a round must not do — see
+    /// WiFiInterface::ReconnectSta.
     void AttemptStaConnect(bool freshRadio);
+
+    /// The network the current attempt is aimed at, for the log. Empty string when
+    /// nothing is configured, so a format string is never handed a null.
+    const char* CurrentSsid() const;
+
+    /// "3 attempts" or "3 attempts at each of 2 networks", into caller storage. The
+    /// one-network wording is the one a single-network device deserves to keep: a
+    /// count of one is noise in a line already long enough.
+    void DescribeRound(char* buf, size_t len) const;
     void OpenApWindow();
     void StartProvisioningAp();
 
@@ -160,6 +199,13 @@ private:
     };
 
     // ── Settings (registered with SettingsManager in Init) ──
-    inline static StringSetting wifiSsid_    { "wifi.ssid",     "WiFi SSID",     "" };
-    inline static StringSetting wifiPassword_{ "wifi.password", "WiFi Password", "" };
+    /// Two networks, tried in the order they are declared. The second pair is
+    /// optional and an empty SSID means "not configured" — which is also why the
+    /// first pair keeps its original keys: a device already provisioned through
+    /// `wifi.ssid` must not need reprovisioning to gain a fallback. NVS allows 15
+    /// characters per key, and `wifi.password2` is 14.
+    inline static StringSetting wifiSsid_     { "wifi.ssid",      "WiFi SSID",              "" };
+    inline static StringSetting wifiPassword_ { "wifi.password",  "WiFi Password",          "" };
+    inline static StringSetting wifiSsid2_    { "wifi.ssid2",     "WiFi SSID (fallback)",     "" };
+    inline static StringSetting wifiPassword2_{ "wifi.password2", "WiFi Password (fallback)", "" };
 };

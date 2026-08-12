@@ -35,6 +35,16 @@ python -m esptool --chip esp32 -p <PORT> -b 460800 --connect-attempts 0 \
     write-flash "@flash_args"     # run from build/
 ```
 
+**The CP210x bridge also drops to "This device cannot start (Code 10)" mid-session**, and
+in that state the port still appears in Device Manager but cannot be opened —
+`FileNotFoundError` from pySerial, not a busy port. Only a physical replug clears it
+(`pnputil /restart-device` needs admin). Check with:
+
+```powershell
+Get-PnpDevice -Class Ports | Where-Object { $_.FriendlyName -match 'CP210x' } |
+    Select-Object FriendlyName, Status, Problem
+```
+
 The board is a build-time choice; pass it to *every* `idf.py` invocation, including `set-target`, because the board folder is what carries `CONFIG_IDF_TARGET`:
 
 ```bash

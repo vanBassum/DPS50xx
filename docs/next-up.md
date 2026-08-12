@@ -38,6 +38,14 @@ since a failed attempt is retried on the failure instead of on the timeout. The 
 *closing* and the round that follows it are still unverified: the device has never been
 left alone for the full fifteen minutes.
 
+**A second WiFi network can be configured, and has never been tried with two.**
+`wifi.ssid2`/`wifi.password2` are registered and the round rotates between the
+configured networks, three attempts each. With one configured the code takes the same
+path it always did, which is what the last flash verified; the rotation itself, and
+`SwitchSta` changing networks on a running station, have only ever run as a one-network
+degenerate case. Configuring the fallback needs a device you can reach — the settings UI
+over `Strux-AP` during a recovery window.
+
 **`vanBassumExt` is out of range of the bench, not wedged.** Two attempts in three
 cannot see it at all (reason 201) and the third hears it at −83 dBm — see
 `reasoning/2026-08-12-14h05`, which revises the wedged-extender inference in

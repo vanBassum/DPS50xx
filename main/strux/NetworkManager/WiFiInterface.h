@@ -10,13 +10,17 @@ public:
     void Init();
     void SetHostname(const char* hostname);
 
+    /// Bring the station up on this network from whatever state the radio is in.
     void ConnectSta(const char* ssid, const char* password);
 
-    /// Try the configured network again without taking the radio down. What
-    /// ConnectSta does minus the parts that only change between rounds — and the
-    /// parts it leaves out are the ones that cost: stopping the station raises a
+    /// Point the running station at a *different* network. Valid only while the
+    /// station is already up, which is the case for every attempt after the first of
+    /// a round — and what it leaves out is what costs: stopping the station raises a
     /// disconnect of its own that a caller then has to tell apart from a real
     /// failure, and starting it again re-runs PHY init for nothing.
+    void SwitchSta(const char* ssid, const char* password);
+
+    /// Try the network already loaded in the driver again, unchanged.
     void ReconnectSta();
 
     void StartAP(const char* ssid, const char* password, uint8_t channel = 1, uint8_t maxConnections = 4);
@@ -58,6 +62,10 @@ private:
     esp_netif_t* staNetif_ = nullptr;
     esp_netif_t* apNetif_ = nullptr;
     bool isAP_ = false;
+
+    /// Loads a network into the driver. Shared by ConnectSta and SwitchSta, which
+    /// differ only in whether the station has to be brought up around it.
+    void ApplyStaConfig(const char* ssid, const char* password);
 
     static void WifiEventHandler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data);
     void OnWifiEvent(esp_event_base_t event_base, int32_t event_id, void* event_data);

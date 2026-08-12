@@ -66,7 +66,8 @@ void NetworkManager::Init()
     connectTimer_.SetHandler([this]() { OnCycleTimer(); });
 
     strux_.getCommandManager().Register(this, commands_);
-    strux_.getSettingsManager().Register({ &wifiSsid_, &wifiPassword_ });
+    strux_.getSettingsManager().Register({ &wifiSsid_, &wifiPassword_,
+                                           &wifiSsid2_, &wifiPassword2_ });
 
     initAttempt.SetReady();
     ESP_LOGI(TAG, "Initialized");
@@ -88,6 +89,21 @@ const WiFiInterface& NetworkManager::wifi() const
     return wifi_interface_;
 }
 
+const char* NetworkManager::CurrentSsid() const
+{
+    const int i = staIndex_.load();
+    return (i < staCount_) ? staNetworks_[i].ssid : "";
+}
+
+void NetworkManager::DescribeRound(char* buf, size_t len) const
+{
+    if (staCount_ > 1)
+        snprintf(buf, len, "%d attempts at each of %d networks",
+                 StaAttemptsPerRound, staCount_);
+    else
+        snprintf(buf, len, "%d attempts", StaAttemptsPerRound);
+}
+
 void NetworkManager::OnCycleTimer()
 {
     // An expiring AP window is the one tick that is not a failed attempt. On an
@@ -95,8 +111,11 @@ void NetworkManager::OnCycleTimer()
     // same tick is how credentials that arrive through the AP get noticed.
     if (apWindowOpen_)
     {
-        if (staSsid_[0] != '\0')
-            ESP_LOGI(TAG, "AP window over, trying '%s' again", staSsid_);
+        if (staCount_ > 1)
+            ESP_LOGI(TAG, "AP window over, trying the %d configured networks again",
+                     staCount_);
+        else if (staCount_ == 1)
+            ESP_LOGI(TAG, "AP window over, trying '%s' again", staNetworks_[0].ssid);
         BeginStaRound();
         return;
     }
@@ -119,31 +138,36 @@ void NetworkManager::OnCycleTimer()
     {
         const uint8_t reason = staLastReason_.load();
         char beacon[24];
+        char round[64];
+        DescribeRound(round, sizeof(round));
+
         if (reason != 0)
-            ESP_LOGW(TAG, "'%s' not joined: %s (reason %d, %s); alternating %d "
-                          "attempts with a %d min AP window for as long as this "
-                          "device is powered",
-                     staSsid_, WiFiInterface::DisconnectReason(reason), reason,
+            ESP_LOGW(TAG, "'%s' not joined: %s (reason %d, %s); alternating %s with "
+                          "a %d min AP window for as long as this device is powered",
+                     CurrentSsid(), WiFiInterface::DisconnectReason(reason), reason,
                      WiFiInterface::BeaconStrength(beacon, sizeof(beacon),
                                                    staLastRssi_.load()),
-                     StaAttemptsPerRound, ApWindowMs / 60000);
+                     round, ApWindowMs / 60000);
         else
             ESP_LOGW(TAG, "'%s' said nothing at all within %d ms, not even a refusal; "
-                          "alternating %d attempts with a %d min AP window for as "
-                          "long as this device is powered",
-                     staSsid_, StaConnectTimeoutMs, StaAttemptsPerRound,
-                     ApWindowMs / 60000);
+                          "alternating %s with a %d min AP window for as long as this "
+                          "device is powered",
+                     CurrentSsid(), StaConnectTimeoutMs, round, ApWindowMs / 60000);
     }
 
-    if (staRoundAttempts_ >= StaAttemptsPerRound)
+    if (staRoundAttempts_ >= StaAttemptsPerRound * staCount_)
     {
         OpenApWindow();
         return;
     }
 
+    // On to the next configured network, which with one configured is the same one
+    // and therefore the behaviour this had before there were two.
+    staIndex_ = (staIndex_.load() + 1) % staCount_;
+
     // A flat cadence rather than a backoff: this is an association with a local
     // access point, not a dial-out to a server a retry loop could overwhelm. The
-    // radio stays up across the retry — a round is one station, tried again.
+    // radio stays up across the attempt either way — see AttemptStaConnect.
     AttemptStaConnect(false);
 }
 
@@ -152,15 +176,35 @@ void NetworkManager::BeginStaRound()
     // Re-read the credentials, so the network provisioned through the AP window is
     // the one this round tries. Nothing else re-reads them, and before the cycle
     // existed there was no second round to re-read them for.
-    char prevSsid[sizeof(staSsid_)];
-    char prevPassword[sizeof(staPassword_)];
-    snprintf(prevSsid, sizeof(prevSsid), "%s", staSsid_);
-    snprintf(prevPassword, sizeof(prevPassword), "%s", staPassword_);
+    StaNetwork previous[MaxStaNetworks];
+    const int previousCount = staCount_;
+    memcpy(previous, staNetworks_, sizeof(previous));
 
-    wifiSsid_.Get(staSsid_, sizeof(staSsid_));
-    wifiPassword_.Get(staPassword_, sizeof(staPassword_));
+    // Zeroed before every read, so that memcmp below compares credentials rather
+    // than whatever a longer SSID left behind the terminator of a shorter one.
+    memset(staNetworks_, 0, sizeof(staNetworks_));
+    staCount_ = 0;
 
-    if (strcmp(prevSsid, staSsid_) != 0 || strcmp(prevPassword, staPassword_) != 0)
+    StringSetting* const configured[MaxStaNetworks][2] = {
+        { &wifiSsid_,  &wifiPassword_  },
+        { &wifiSsid2_, &wifiPassword2_ },
+    };
+
+    for (const auto& pair : configured)
+    {
+        StaNetwork candidate = {};
+        pair[0]->Get(candidate.ssid, sizeof(candidate.ssid));
+        pair[1]->Get(candidate.password, sizeof(candidate.password));
+
+        // An empty SSID is a slot nobody filled in, not a network to fail against.
+        // Compacting here is what lets everything downstream treat staCount_ as the
+        // number of real networks and index them without gaps.
+        if (candidate.ssid[0] != '\0')
+            staNetworks_[staCount_++] = candidate;
+    }
+
+    if (previousCount != staCount_ ||
+        memcmp(previous, staNetworks_, sizeof(previous)) != 0)
     {
         // New credentials are a new problem. Counting their failures into the
         // outage the old ones caused would hide the one line worth reading — that
@@ -171,28 +215,33 @@ void NetworkManager::BeginStaRound()
         staOutageStartTick_ = xTaskGetTickCount();
     }
 
-    if (staSsid_[0] == '\0')
+    if (staCount_ == 0)
     {
         StartProvisioningAp();
         return;
     }
 
+    // Every round starts at the first configured network, which is what makes the
+    // order in the settings mean something: the second pair is a fallback, not a peer.
     staRoundAttempts_ = 0;
+    staIndex_ = 0;
     AttemptStaConnect(true);
 }
 
 void NetworkManager::AttemptStaConnect(bool freshRadio)
 {
-    if (staSsid_[0] == '\0')
+    if (staCount_ == 0)
     {
         StartProvisioningAp();
         return;
     }
 
+    const StaNetwork& network = staNetworks_[staIndex_.load()];
+
     // Only the first attempt of an outage announces itself; the rest are the cycle,
     // which OnCycleTimer has already accounted for.
     if (staOutageAttempts_ == 0)
-        ESP_LOGI(TAG, "Attempting STA connection to '%s'", staSsid_);
+        ESP_LOGI(TAG, "Attempting STA connection to '%s'", network.ssid);
 
     apWindowOpen_ = false;
     staConnected_ = false;
@@ -200,13 +249,20 @@ void NetworkManager::AttemptStaConnect(bool freshRadio)
     if (freshRadio)
     {
         wifi_interface_.Stop();
-        wifi_interface_.ConnectSta(staSsid_, staPassword_);
+        wifi_interface_.ConnectSta(network.ssid, network.password);
     }
-    else
+    else if (staIndex_.load() == staLastIndex_.load())
     {
         wifi_interface_.ReconnectSta();
     }
+    else
+    {
+        // A different network, on a station that is already up: the driver needs the
+        // new credentials, and nothing else about the radio has to change.
+        wifi_interface_.SwitchSta(network.ssid, network.password);
+    }
 
+    staLastIndex_ = staIndex_.load();
     connectTimer_.SetPeriod(pdMS_TO_TICKS(StaConnectTimeoutMs));
     connectTimer_.Start();
 }
@@ -221,8 +277,15 @@ void NetworkManager::OpenApWindow()
     connectTimer_.Stop();
     wifi_interface_.Stop();
 
-    ESP_LOGW(TAG, "'%s' unreachable after %d attempts, opening '%s' for %d min",
-             staSsid_, StaAttemptsPerRound, DefaultApSsid, ApWindowMs / 60000);
+    if (staCount_ > 1)
+        ESP_LOGW(TAG, "none of %d configured networks reachable after %d attempts, "
+                      "opening '%s' for %d min",
+                 staCount_, staRoundAttempts_.load(), DefaultApSsid,
+                 ApWindowMs / 60000);
+    else
+        ESP_LOGW(TAG, "'%s' unreachable after %d attempts, opening '%s' for %d min",
+                 staNetworks_[0].ssid, staRoundAttempts_.load(), DefaultApSsid,
+                 ApWindowMs / 60000);
     wifi_interface_.StartAP(DefaultApSsid, DefaultApPassword);
 
     connectTimer_.SetPeriod(pdMS_TO_TICKS(ApWindowMs));
@@ -322,7 +385,7 @@ void NetworkManager::HandleNetworkEvent(const NetworkEvent& event)
         // rather than derived, because AP windows sit between the attempts.
         if (staOutageAttempts_ > 0)
             ESP_LOGI(TAG, "Reconnected to '%s' after %d attempts (~%u s down)",
-                     staSsid_, staOutageAttempts_.load() + 1,
+                     CurrentSsid(), staOutageAttempts_.load() + 1,
                      static_cast<unsigned>(
                          pdTICKS_TO_MS(xTaskGetTickCount() - staOutageStartTick_) / 1000));
 

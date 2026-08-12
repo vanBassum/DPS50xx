@@ -82,7 +82,33 @@ void WiFiInterface::ConnectSta(const char* ssid, const char* password)
     netif_ = staNetif_;
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ApplyStaConfig(ssid, password);
+    ESP_ERROR_CHECK(esp_wifi_start());
+    esp_wifi_connect();
+}
 
+void WiFiInterface::SwitchSta(const char* ssid, const char* password)
+{
+    ESP_LOGI(TAG, "Switching to '%s'", ssid);
+
+    ApplyStaConfig(ssid, password);
+
+    esp_err_t err = esp_wifi_connect();
+    if (err != ESP_OK)
+        ESP_LOGW(TAG, "connect refused: %s", esp_err_to_name(err));
+}
+
+void WiFiInterface::ReconnectSta()
+{
+    // No set_config: the credentials and scan policy are already in the driver, and
+    // re-connecting is the pattern esp_wifi is built around.
+    esp_err_t err = esp_wifi_connect();
+    if (err != ESP_OK)
+        ESP_LOGW(TAG, "reconnect refused: %s", esp_err_to_name(err));
+}
+
+void WiFiInterface::ApplyStaConfig(const char* ssid, const char* password)
+{
     wifi_config_t config = {};
     // strncpy, NOT snprintf, and deliberately so: these are esp_wifi's fixed-width
     // fields, not C strings. A 32-character SSID legitimately fills ssid[32] with no
@@ -101,17 +127,6 @@ void WiFiInterface::ConnectSta(const char* ssid, const char* password)
     config.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
 
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &config));
-    ESP_ERROR_CHECK(esp_wifi_start());
-    esp_wifi_connect();
-}
-
-void WiFiInterface::ReconnectSta()
-{
-    // No set_config: the credentials and scan policy are already in the driver from
-    // ConnectSta, and re-connecting is the pattern esp_wifi is built around.
-    esp_err_t err = esp_wifi_connect();
-    if (err != ESP_OK)
-        ESP_LOGW(TAG, "reconnect refused: %s", esp_err_to_name(err));
 }
 
 void WiFiInterface::StartAP(const char* ssid, const char* password, uint8_t channel, uint8_t maxConnections)
