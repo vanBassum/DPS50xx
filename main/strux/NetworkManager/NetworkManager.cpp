@@ -110,10 +110,27 @@ void NetworkManager::OnCycleTimer()
     // Say why once per outage, then go quiet and count: this loop runs for the life
     // of the device, so one line per failure is one line forever. Ipv4Acquired
     // reports the total. See docs/reasoning/2026-08-05-22h33.
+    //
+    // "Why" is the radio's reason code, not this manager's guess at one. The
+    // alternative was a line that read the same whether the password was wrong, the
+    // network absent, or the AP merely too far to reach — three failures with three
+    // different answers, and the log is all a remote device has.
     if (!staOutageLogged_.exchange(true))
-        ESP_LOGW(TAG, "'%s' did not answer; alternating %d attempts with a %d min "
-                      "AP window for as long as this device is powered",
-                 staSsid_, StaAttemptsPerRound, ApWindowMs / 60000);
+    {
+        const uint8_t reason = staLastReason_.load();
+        if (reason != 0)
+            ESP_LOGW(TAG, "'%s' not joined: %s (reason %d, last beacon %d dBm); "
+                          "alternating %d attempts with a %d min AP window for as "
+                          "long as this device is powered",
+                     staSsid_, WiFiInterface::DisconnectReason(reason), reason,
+                     staLastRssi_.load(), StaAttemptsPerRound, ApWindowMs / 60000);
+        else
+            ESP_LOGW(TAG, "'%s' said nothing at all within %d ms, not even a refusal; "
+                          "alternating %d attempts with a %d min AP window for as "
+                          "long as this device is powered",
+                     staSsid_, StaConnectTimeoutMs, StaAttemptsPerRound,
+                     ApWindowMs / 60000);
+    }
 
     if (staRoundAttempts_ >= StaAttemptsPerRound)
     {
@@ -122,8 +139,9 @@ void NetworkManager::OnCycleTimer()
     }
 
     // A flat cadence rather than a backoff: this is an association with a local
-    // access point, not a dial-out to a server a retry loop could overwhelm.
-    AttemptStaConnect();
+    // access point, not a dial-out to a server a retry loop could overwhelm. The
+    // radio stays up across the retry — a round is one station, tried again.
+    AttemptStaConnect(false);
 }
 
 void NetworkManager::BeginStaRound()
@@ -146,6 +164,7 @@ void NetworkManager::BeginStaRound()
         // what was just entered does not work either.
         staOutageAttempts_ = 0;
         staOutageLogged_ = false;
+        staLastReason_ = 0;
         staOutageStartTick_ = xTaskGetTickCount();
     }
 
@@ -156,10 +175,10 @@ void NetworkManager::BeginStaRound()
     }
 
     staRoundAttempts_ = 0;
-    AttemptStaConnect();
+    AttemptStaConnect(true);
 }
 
-void NetworkManager::AttemptStaConnect()
+void NetworkManager::AttemptStaConnect(bool freshRadio)
 {
     if (staSsid_[0] == '\0')
     {
@@ -173,9 +192,18 @@ void NetworkManager::AttemptStaConnect()
         ESP_LOGI(TAG, "Attempting STA connection to '%s'", staSsid_);
 
     apWindowOpen_ = false;
-    wifi_interface_.Stop();
     staConnected_ = false;
-    wifi_interface_.ConnectSta(staSsid_, staPassword_);
+
+    if (freshRadio)
+    {
+        wifi_interface_.Stop();
+        wifi_interface_.ConnectSta(staSsid_, staPassword_);
+    }
+    else
+    {
+        wifi_interface_.ReconnectSta();
+    }
+
     connectTimer_.SetPeriod(pdMS_TO_TICKS(StaConnectTimeoutMs));
     connectTimer_.Start();
 }
@@ -236,30 +264,52 @@ void NetworkManager::HandleNetworkEvent(const NetworkEvent& event)
         break;
 
     case NetworkEventType::LinkDown:
+    {
         // apWindowOpen_ covers the disconnect this manager caused itself by taking
         // the station down to open the window: it is not news, and acting on it
         // would count the teardown as a failed attempt.
-        if (!wifi_interface_.IsAP() && !apWindowOpen_)
-        {
-            ESP_LOGW(TAG, "STA disconnected");
+        if (wifi_interface_.IsAP() || apWindowOpen_)
+            break;
 
-            if (staConnected_)
-            {
-                // Was connected, lost the link — a fresh outage, so it gets to
-                // explain itself once more and starts its own round of attempts.
-                staConnected_ = false;
-                staRoundAttempts_ = 0;
-                staOutageAttempts_ = 0;
-                staOutageLogged_ = false;
-                staOutageStartTick_ = xTaskGetTickCount();
-                ESP_LOGI(TAG, "Lost connection, attempting reconnect");
-                esp_wifi_connect();
-                connectTimer_.SetPeriod(pdMS_TO_TICKS(StaConnectTimeoutMs));
-                connectTimer_.Start();
-            }
-            // If not yet connected, the cycle timer handles retries
+        // Kept for the summary line, which is written a tick later by the cycle timer
+        // and has nowhere else to learn this from.
+        staLastReason_ = event.reason;
+        staLastRssi_ = event.rssi;
+
+        if (staConnected_)
+        {
+            // Was connected, lost the link — a fresh outage, so it gets to explain
+            // itself once more and starts its own round of attempts.
+            staConnected_ = false;
+            staRoundAttempts_ = 0;
+            staOutageAttempts_ = 0;
+            staOutageLogged_ = false;
+            staOutageStartTick_ = xTaskGetTickCount();
+            ESP_LOGI(TAG, "Lost connection, attempting reconnect");
+            wifi_interface_.ReconnectSta();
+            connectTimer_.SetPeriod(pdMS_TO_TICKS(StaConnectTimeoutMs));
+            connectTimer_.Start();
+            break;
         }
+
+        // Not connected yet, so this is the attempt in progress failing — and once it
+        // has failed there is nothing left for its timeout to wait for. Standing on
+        // the full StaConnectTimeoutMs spent nine of every ten seconds of a station
+        // round with the radio doing nothing, in the one situation where the fix is
+        // often simply to ask again.
+        //
+        // Only a reason the radio actually reported counts. Reason 0 is a LinkDown
+        // from somewhere with nothing to say (the AP stopping as a round begins), and
+        // ASSOC_LEAVE is this manager's own esp_wifi_disconnect echoing back; acting
+        // on either would retry an attempt that has not been made yet, and three of
+        // those inside a second is a round spent before it started.
+        if (event.reason == 0 || event.reason == WIFI_REASON_ASSOC_LEAVE)
+            break;
+
+        connectTimer_.SetPeriod(pdMS_TO_TICKS(StaRetryDelayMs));
+        connectTimer_.Start();
         break;
+    }
 
     case NetworkEventType::Ipv4Acquired:
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&event.status.ipv4.ip));
@@ -279,6 +329,7 @@ void NetworkManager::HandleNetworkEvent(const NetworkEvent& event)
         staRoundAttempts_ = 0;
         staOutageAttempts_ = 0;
         staOutageLogged_ = false;
+        staLastReason_ = 0;
         break;
 
     case NetworkEventType::Ipv4Lost:

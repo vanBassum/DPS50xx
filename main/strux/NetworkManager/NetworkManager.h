@@ -14,8 +14,17 @@ class Stream;
 
 class NetworkManager {
     static constexpr const char* TAG = "NetworkManager";
-    /// How long one connect attempt is given before it is retried.
+    /// How long one connect attempt is given before it is retried. This is the
+    /// ceiling on an attempt that says nothing at all; an attempt that fails out
+    /// loud is retried after StaRetryDelayMs instead, because waiting out a timeout
+    /// for news that has already arrived is nine idle seconds per attempt.
     static constexpr int StaConnectTimeoutMs = 10000;
+
+    /// How long to leave the radio alone after a failed association before trying
+    /// again. Not zero: the failures that clear on their own are the ones where the
+    /// AP was momentarily unable to answer, and a retry inside the same instant is
+    /// the same instant. Short, because the round is bounded by attempts, not time.
+    static constexpr int StaRetryDelayMs = 2000;
 
     /// The device alternates forever: StaAttemptsPerRound attempts at the
     /// configured network, then an AP window, then the same again, for as long as
@@ -112,6 +121,14 @@ private:
     /// which would otherwise be counted as another failed attempt.
     std::atomic<bool> apWindowOpen_{false};
 
+    /// Why the last association failed, and how strong the AP's last beacon was.
+    /// Kept because the line that explains an outage is written by the cycle timer,
+    /// one tick after the event that knows the answer. Reason 0 means no radio event
+    /// arrived at all — the attempt ran out of time in silence, which is a different
+    /// report and a different suspicion.
+    std::atomic<uint8_t> staLastReason_{0};
+    std::atomic<int8_t> staLastRssi_{0};
+
     /// Whether the current outage has already been explained. A retry loop that
     /// runs for the lifetime of the device turns "one line per failure" into one
     /// line every ten seconds, forever — so the reason is logged once and the
@@ -126,7 +143,12 @@ private:
     void HandleNetworkEvent(const NetworkEvent& event);
     void OnCycleTimer();
     void BeginStaRound();
-    void AttemptStaConnect();
+
+    /// One attempt at the configured network. `freshRadio` restarts the station from
+    /// scratch, which is what a round beginning needs (the radio may be in AP mode,
+    /// and the credentials may have just changed) and what a retry inside a round
+    /// must not do — see WiFiInterface::ReconnectSta.
+    void AttemptStaConnect(bool freshRadio);
     void OpenApWindow();
     void StartProvisioningAp();
 

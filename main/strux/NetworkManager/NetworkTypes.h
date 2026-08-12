@@ -38,4 +38,16 @@ struct NetworkEvent
 {
     NetworkEventType type;
     NetworkStatus status;
+
+    /// Why the link went down, as a wifi_err_reason_t, and how strong the last
+    /// beacon was. Only a LinkDown carries them, and only one the radio reported:
+    /// reason 0 means the event came from somewhere with nothing to say (the AP
+    /// stopping), which is what tells a manager that this LinkDown is its own
+    /// teardown rather than an association that failed. rssi is 0 with it.
+    ///
+    /// The reason used to stop at WiFiInterface's log line, which made every
+    /// failure look alike one level up — see
+    /// docs/reasoning/2026-08-10-19h19.
+    uint8_t reason = 0;
+    int8_t rssi = 0;
 };

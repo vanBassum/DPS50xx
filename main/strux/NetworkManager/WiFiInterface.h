@@ -11,8 +11,19 @@ public:
     void SetHostname(const char* hostname);
 
     void ConnectSta(const char* ssid, const char* password);
+
+    /// Try the configured network again without taking the radio down. What
+    /// ConnectSta does minus the parts that only change between rounds — and the
+    /// parts it leaves out are the ones that cost: stopping the station raises a
+    /// disconnect of its own that a caller then has to tell apart from a real
+    /// failure, and starting it again re-runs PHY init for nothing.
+    void ReconnectSta();
+
     void StartAP(const char* ssid, const char* password, uint8_t channel = 1, uint8_t maxConnections = 4);
     void Stop();
+
+    /// Name of a wifi_err_reason_t, for the codes an ESP32 station actually provokes.
+    static const char* DisconnectReason(uint8_t reason);
 
     bool IsAP() const { return isAP_; }
 
@@ -43,5 +54,5 @@ private:
 
     static void WifiEventHandler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data);
     void OnWifiEvent(esp_event_base_t event_base, int32_t event_id, void* event_data);
-    void RaiseEvent(NetworkEventType type);
+    void RaiseEvent(NetworkEventType type, uint8_t reason = 0, int8_t rssi = 0);
 };

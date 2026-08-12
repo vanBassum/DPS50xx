@@ -14,7 +14,11 @@ Last updated 2026-08-11.
 - `WiFiInterface` logs the disconnect reason by name, and `NetworkManager` alternates
   station rounds with AP windows instead of ending in either — see
   `reasoning/2026-08-10-19h19`. The reason-code line is the one to upstream first: it
-  costs nothing and it is what makes the retry policy decidable at all.
+  costs nothing and it is what makes the retry policy decidable at all. The reason now
+  travels in `NetworkEvent` with the beacon RSSI, which is what lets a failed attempt be
+  retried in 2 s instead of waiting out a 10 s timeout for news that arrived at 1 s, and
+  what tells this manager's own teardown apart from a network refusing — see
+  `reasoning/2026-08-12-13h25`. Same commit, same upstream trip.
 - `NetworkManager::HasIpv4()` became `HasUpstream()`. The AP netif is always
   192.168.4.1, so the relay's "wait for an address" guard said *go ahead* for the whole
   of every recovery AP window — see `reasoning/2026-08-11-22h20`. Travels with the AP

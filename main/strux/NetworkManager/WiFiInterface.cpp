@@ -14,7 +14,7 @@ static WiFiInterface* s_instance = nullptr;
 // esp_wifi has around fifty, most of them 802.11 status codes an ESP32 station
 // never provokes, and a table of those would bury the four that answer the only
 // question being asked — is this the network, the password, or the radio?
-static const char* DisconnectReasonName(uint8_t reason)
+const char* WiFiInterface::DisconnectReason(uint8_t reason)
 {
     switch (reason)
     {
@@ -80,9 +80,27 @@ void WiFiInterface::ConnectSta(const char* ssid, const char* password)
     strncpy((char*)config.sta.ssid, ssid, sizeof(config.sta.ssid) - 1);
     strncpy((char*)config.sta.password, password, sizeof(config.sta.password) - 1);
 
+    // Scan every channel and take the strongest, rather than the default fast scan's
+    // "first beacon that answers". One SSID is routinely more than one radio — a
+    // repeater or extender rebroadcasting the network is the ordinary case, not the
+    // exotic one — and the first of those heard is not necessarily one that will
+    // complete an association. The cost is a second or so of scan per attempt, which
+    // is inside the attempt timeout and cheap against a round that fails.
+    config.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+    config.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
+
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &config));
     ESP_ERROR_CHECK(esp_wifi_start());
     esp_wifi_connect();
+}
+
+void WiFiInterface::ReconnectSta()
+{
+    // No set_config: the credentials and scan policy are already in the driver from
+    // ConnectSta, and re-connecting is the pattern esp_wifi is built around.
+    esp_err_t err = esp_wifi_connect();
+    if (err != ESP_OK)
+        ESP_LOGW(TAG, "reconnect refused: %s", esp_err_to_name(err));
 }
 
 void WiFiInterface::StartAP(const char* ssid, const char* password, uint8_t channel, uint8_t maxConnections)
@@ -213,10 +231,14 @@ void WiFiInterface::OnWifiEvent(esp_event_base_t event_base, int32_t event_id, v
             // and one it never will. Dropping event_data made every failed
             // association read identically from the log, which is a poor place to
             // be when a device will not associate and the log is all there is.
+            // The RSSI travels with it because the reason alone cannot separate the
+            // two failures that look the same from here: an AP that will not have us
+            // and an AP we can hear but not reach. Both time out the association;
+            // -50 dBm and -85 dBm are which is which.
             auto* event = static_cast<wifi_event_sta_disconnected_t*>(event_data);
-            ESP_LOGW(TAG, "STA disconnected: %s (reason %d)",
-                     DisconnectReasonName(event->reason), event->reason);
-            RaiseEvent(NetworkEventType::LinkDown);
+            ESP_LOGW(TAG, "STA disconnected: %s (reason %d, last beacon %d dBm)",
+                     DisconnectReason(event->reason), event->reason, event->rssi);
+            RaiseEvent(NetworkEventType::LinkDown, event->reason, event->rssi);
             break;
         }
 
@@ -280,7 +302,7 @@ void WiFiInterface::OnWifiEvent(esp_event_base_t event_base, int32_t event_id, v
     }
 }
 
-void WiFiInterface::RaiseEvent(NetworkEventType type)
+void WiFiInterface::RaiseEvent(NetworkEventType type, uint8_t reason, int8_t rssi)
 {
     if (!eventHandler_)
         return;
@@ -288,5 +310,7 @@ void WiFiInterface::RaiseEvent(NetworkEventType type)
     NetworkEvent event{};
     event.type = type;
     event.status = getStatus();
+    event.reason = reason;
+    event.rssi = rssi;
     eventHandler_(event);
 }

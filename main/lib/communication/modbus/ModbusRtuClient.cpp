@@ -201,7 +201,6 @@ ModbusError ModbusRtuClient::Execute(uint8_t unitId,
     // Read response using deterministic frame-size detection
     // -------------------------
     TickType_t rxTimeout = pdMS_TO_TICKS(timeoutMs);
-    const TickType_t rxStart = xTaskGetTickCount();
     int rxPtr = 0;
 
     // Read unitId + function (2 bytes)
@@ -303,13 +302,6 @@ ModbusError ModbusRtuClient::Execute(uint8_t unitId,
 
     if (func != request.functionCode)
         return ModbusError::InvalidReplyFunctionCode;
-
-    // A reply that only just made the deadline is the same fault as one that just
-    // missed it, and only the second announces itself. Reported once it is past
-    // half the budget — not per transaction, which would be a line per poll forever.
-    const uint32_t elapsedMs = pdTICKS_TO_MS(xTaskGetTickCount() - rxStart);
-    if (elapsedMs > (uint32_t)timeoutMs / 2)
-        ESP_LOGW(TAG, "reply took %ums of a %dms budget", (unsigned)elapsedMs, timeoutMs);
 
     // -------------------------
     // Deserialize PDU (skip unitId, exclude CRC)
