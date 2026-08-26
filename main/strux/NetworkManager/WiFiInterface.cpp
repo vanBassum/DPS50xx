@@ -66,6 +66,17 @@ void WiFiInterface::Init()
         WIFI_EVENT, ESP_EVENT_ANY_ID, &WifiEventHandler, this, nullptr));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(
         IP_EVENT, ESP_EVENT_ANY_ID, &WifiEventHandler, this, nullptr));
+
+    // No modem sleep. esp_wifi defaults to WIFI_PS_MIN_MODEM, where the station only
+    // wakes for DTIM beacons — so every TCP round trip waits out a beacon interval,
+    // and a 477-byte index.html measured 13.5 s to serve. This device is mains
+    // powered and exists to answer a browser; latency is the resource worth spending
+    // on, not milliamps.
+    //
+    // It is also the standing suspect for the reason 4 ("AP saw us as idle")
+    // deauthentications this hits on some routers, which is a weaker claim than the
+    // latency one — the latency is measured, the deauth link is inference.
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
 }
 
 void WiFiInterface::SetHostname(const char* hostname)
