@@ -137,6 +137,17 @@ void WiFiInterface::ApplyStaConfig(const char* ssid, const char* password)
     config.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
     config.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
 
+    // Advertise PMF support. `config = {}` zeroes pmf_cfg, and a station that claims
+    // no Protected Management Frames is refused outright by a WPA3 access point and
+    // by the WPA2/WPA3 transition mode most modern routers and extenders ship with.
+    // The refusal arrives as an auth timeout (reason 2) at full signal strength,
+    // which reads as a range or antenna problem and is neither.
+    //
+    // capable, not required: an AP that does not offer PMF must still be joinable,
+    // and plenty of WPA2-only hardware does not.
+    config.sta.pmf_cfg.capable = true;
+    config.sta.pmf_cfg.required = false;
+
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &config));
 }
 
