@@ -26,6 +26,13 @@ class NetworkManager {
     /// the same instant. Short, because the round is bounded by attempts, not time.
     static constexpr int StaRetryDelayMs = 2000;
 
+    /// How long DHCP gets once the radio has associated. This is a separate wait
+    /// from StaConnectTimeoutMs, and it has to be: association and address are two
+    /// steps, and the cycle timer used to treat the gap between them as a failed
+    /// attempt — rotating networks on a station that was already joined. See the
+    /// staAssociated_ note below.
+    static constexpr int StaDhcpTimeoutMs = 15000;
+
     /// How many networks may be configured. Two, because the reason for a second is
     /// a device that lives within reach of two and cannot be told which one will be
     /// up — not a list to be managed, which would want a different settings shape
@@ -165,6 +172,16 @@ private:
     /// repeats are counted, reported by the connect that finally succeeds.
     /// See docs/reasoning/2026-08-05-22h33.
     std::atomic<bool> staOutageLogged_{false};
+
+    /// Associated, but without an address yet — the step between LinkUp and
+    /// Ipv4Acquired. staConnected_ cannot answer this: it means "has an address",
+    /// which is what its one caller (HasUpstream) needs, and it is only set by
+    /// Ipv4Acquired. Without a flag for the middle state the cycle timer read an
+    /// associated station as an attempt still failing and rotated to the next
+    /// network — esp_wifi refusing each one with "sta is connected, disconnect
+    /// before connecting to new ap", which is the only reason the link survived.
+    /// DHCP on a busy AP routinely takes longer than one cycle period.
+    std::atomic<bool> staAssociated_{false};
 
     /// One timer, two periods: the patience for a single connect attempt, and the
     /// length of the AP window. Which one is running is apWindowOpen_.

@@ -123,6 +123,33 @@ void NetworkManager::OnCycleTimer()
     if (staConnected_)
         return;
 
+    // Associated, but no address yet. A slow DHCP is not a network refusing us, and
+    // this tick must not rotate: esp_wifi refuses a switch on a connected station
+    // ("sta is connected, disconnect before connecting to new ap"), so the rotation
+    // left this manager believing it had moved on while the link it meant to abandon
+    // was the one that worked — and the summary line then named the wrong SSID,
+    // because CurrentSsid() follows the index the rotation had already advanced.
+    //
+    // Tear the station down and try the SAME network again: the one that let us in is
+    // still the best candidate. It counts as an attempt, so an AP that associates and
+    // never hands out an address still reaches the AP window instead of looping here.
+    if (staAssociated_.exchange(false))
+    {
+        staRoundAttempts_++;
+        staOutageAttempts_++;
+        ESP_LOGW(TAG, "'%s' associated but gave no address within %d ms; "
+                      "restarting the station", CurrentSsid(), StaDhcpTimeoutMs);
+
+        if (staRoundAttempts_ >= StaAttemptsPerRound * staCount_)
+        {
+            OpenApWindow();
+            return;
+        }
+
+        AttemptStaConnect(true);
+        return;
+    }
+
     staRoundAttempts_++;
     staOutageAttempts_++;
 
@@ -245,6 +272,7 @@ void NetworkManager::AttemptStaConnect(bool freshRadio)
 
     apWindowOpen_ = false;
     staConnected_ = false;
+    staAssociated_ = false;
 
     if (freshRadio)
     {
@@ -322,6 +350,14 @@ void NetworkManager::HandleNetworkEvent(const NetworkEvent& event)
         if (!wifi_interface_.IsAP())
         {
             ESP_LOGI(TAG, "STA connected to AP");
+
+            // Associated. The attempt has succeeded at the only thing an attempt can
+            // do; what is left is DHCP, which is not this round's business and takes
+            // as long as the AP takes. Hand the timer over to the address wait, or
+            // the next tick rotates away from a network that just let us in.
+            staAssociated_ = true;
+            connectTimer_.SetPeriod(pdMS_TO_TICKS(StaDhcpTimeoutMs));
+            connectTimer_.Start();
         }
         else
         {
@@ -347,6 +383,7 @@ void NetworkManager::HandleNetworkEvent(const NetworkEvent& event)
             // Was connected, lost the link — a fresh outage, so it gets to explain
             // itself once more and starts its own round of attempts.
             staConnected_ = false;
+            staAssociated_ = false;
             staRoundAttempts_ = 0;
             staOutageAttempts_ = 0;
             staOutageLogged_ = false;
@@ -392,6 +429,7 @@ void NetworkManager::HandleNetworkEvent(const NetworkEvent& event)
         connectTimer_.Stop();
         apWindowOpen_ = false;
         staConnected_ = true;
+        staAssociated_ = false;
         staRoundAttempts_ = 0;
         staOutageAttempts_ = 0;
         staOutageLogged_ = false;
@@ -401,6 +439,7 @@ void NetworkManager::HandleNetworkEvent(const NetworkEvent& event)
     case NetworkEventType::Ipv4Lost:
         ESP_LOGW(TAG, "Lost IP");
         staConnected_ = false;
+        staAssociated_ = false;
         break;
     }
 }
