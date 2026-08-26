@@ -18,14 +18,21 @@ namespace BoardConfig
     static constexpr bool LED_ACTIVE_HIGH = false;
 
     // ── Modbus RTU to the DPS50xx ──
-    // 0/1 rather than the 21/20 this started on, matching the bench wiring. The move
-    // was made chasing a WiFi fault and did NOT fix it: with the DPS wired to this
-    // board, the station fails to hold an association on either pin pair. That fault
-    // is not in this file and not in the firmware at all — it reproduces with the
-    // UART never configured, the poll task never started, and these pads left in
-    // their power-on high-impedance state. Pick whichever pair suits the wiring.
-    static constexpr int      MODBUS_TX_PIN    = 0;
-    static constexpr int      MODBUS_RX_PIN    = 1;
+    // 6/5, and the choice is about the ANTENNA, not the UART. This board's ceramic
+    // antenna is placed without the keep-out clearance its datasheet requires, so it
+    // is detuned by conductors near it — a documented SuperMini flaw that names
+    // GPIO20/21 specifically. Wiring the DPS to 21/20 (and then to 0/1) stopped the
+    // station holding an association at all: it associated, never got an address,
+    // and the web UI was unreachable. Same wires on 6/5: associates in 2.8 s, address
+    // in 3.9 s, index.html served in 63 ms.
+    //
+    // It is not the firmware. The fault reproduced with the UART never configured,
+    // the poll task never started, and the pads left in their power-on
+    // high-impedance state — a passive wire detunes just as well as a driven one.
+    // So when moving these, the question is distance from the antenna, and stray
+    // wire ROUTING matters as much as which pad is chosen.
+    static constexpr int      MODBUS_TX_PIN    = 6;
+    static constexpr int      MODBUS_RX_PIN    = 5;
     static constexpr uint32_t MODBUS_BAUD      = 9600;
     static constexpr int      MODBUS_UART_PORT = 1;   // UART_NUM_1
 
