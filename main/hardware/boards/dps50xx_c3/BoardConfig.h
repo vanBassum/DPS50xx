@@ -18,8 +18,14 @@ namespace BoardConfig
     static constexpr bool LED_ACTIVE_HIGH = false;
 
     // ── Modbus RTU to the DPS50xx ──
-    static constexpr int      MODBUS_TX_PIN    = 21;
-    static constexpr int      MODBUS_RX_PIN    = 20;
+    // 0/1 rather than the 21/20 this started on, matching the bench wiring. The move
+    // was made chasing a WiFi fault and did NOT fix it: with the DPS wired to this
+    // board, the station fails to hold an association on either pin pair. That fault
+    // is not in this file and not in the firmware at all — it reproduces with the
+    // UART never configured, the poll task never started, and these pads left in
+    // their power-on high-impedance state. Pick whichever pair suits the wiring.
+    static constexpr int      MODBUS_TX_PIN    = 0;
+    static constexpr int      MODBUS_RX_PIN    = 1;
     static constexpr uint32_t MODBUS_BAUD      = 9600;
     static constexpr int      MODBUS_UART_PORT = 1;   // UART_NUM_1
 
