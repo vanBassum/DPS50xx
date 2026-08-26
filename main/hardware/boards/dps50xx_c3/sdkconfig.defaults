@@ -4,3 +4,14 @@
 # SDKCONFIG_DEFAULTS composition in the root CMakeLists.txt.
 
 CONFIG_IDF_TARGET="esp32c3"
+
+# Console on the chip's own USB Serial/JTAG, not UART0.
+#
+# UART0's default pins on the ESP32-C3 are GPIO20/21 — which are this board's
+# Modbus pins (see BoardConfig.h). With the UART console enabled, both the console
+# and the Modbus UART1 claim the same two pads, and Modbus only wins because
+# BoardContext::Init() runs after console init. Correct by accident is not correct.
+#
+# The SuperMini's only port IS the native USB, so this is also what the console
+# should have been on from the start.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
