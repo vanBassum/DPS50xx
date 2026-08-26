@@ -49,7 +49,15 @@ public:
         int8_t rssi;
         uint8_t channel;
         bool secure;
+        /// The AP's advertised authmode, not just whether it has one. WPA2 and
+        /// WPA2/WPA3 transition mode are different problems for a station: the
+        /// second needs PMF, and refuses a station without it during auth — which
+        /// looks exactly like being out of range. `secure` cannot express that.
+        wifi_auth_mode_t authmode;
     };
+
+    /// Name for a wifi_auth_mode_t, for logs and replies.
+    static const char* AuthModeName(wifi_auth_mode_t mode);
 
     /// Scan for WiFi networks. Returns the number of results written.
     int Scan(ScanResult* out, int maxResults);

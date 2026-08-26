@@ -466,6 +466,7 @@ RequestError NetworkManager::Cmd_WifiScan(CommandContext& ctx)
         n.field("rssi", static_cast<int32_t>(results[i].rssi));
         n.field("channel", static_cast<int32_t>(results[i].channel));
         n.field("secure", results[i].secure);
+        n.field("auth", WiFiInterface::AuthModeName(results[i].authmode));
     }
     return RequestError::Ok;
 }

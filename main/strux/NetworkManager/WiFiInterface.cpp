@@ -35,6 +35,23 @@ const char* WiFiInterface::DisconnectReason(uint8_t reason)
     }
 }
 
+const char* WiFiInterface::AuthModeName(wifi_auth_mode_t mode)
+{
+    switch (mode)
+    {
+    case WIFI_AUTH_OPEN:            return "open";
+    case WIFI_AUTH_WEP:             return "WEP";
+    case WIFI_AUTH_WPA_PSK:         return "WPA";
+    case WIFI_AUTH_WPA2_PSK:        return "WPA2";
+    case WIFI_AUTH_WPA_WPA2_PSK:    return "WPA/WPA2";
+    case WIFI_AUTH_WPA3_PSK:        return "WPA3";
+    case WIFI_AUTH_WPA2_WPA3_PSK:   return "WPA2/WPA3";
+    case WIFI_AUTH_WAPI_PSK:        return "WAPI";
+    case WIFI_AUTH_ENTERPRISE:      return "enterprise";
+    default:                        return "other";
+    }
+}
+
 const char* WiFiInterface::BeaconStrength(char* buf, size_t len, int8_t rssi)
 {
     // -100 rather than exactly -128: anything at or below it is either the filler or
@@ -235,6 +252,7 @@ int WiFiInterface::Scan(ScanResult* out, int maxResults)
         out[count].rssi = record.rssi;
         out[count].channel = record.primary;
         out[count].secure = record.authmode != WIFI_AUTH_OPEN;
+        out[count].authmode = record.authmode;
         count++;
     }
 
