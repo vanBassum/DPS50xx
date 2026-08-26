@@ -19,6 +19,9 @@
 # Build artifacts and directories
 **/build/
 build/
+# Second-board build dirs: CLAUDE.md documents `-B build-c3` for keeping two
+# targets side by side, so these are as generated as build/ itself.
+build-*/
 *.o
 *.a
 *.out
@@ -31,6 +34,9 @@ build/
 flasher_args.json # Generated in build directory
 sdkconfig.old
 sdkconfig
+# Per-board sdkconfigs, from `-DSDKCONFIG=sdkconfig-<board>` — the way to stop
+# two boards fighting over the one shared file.
+sdkconfig-*
 
 # ESP-IDF dependencies
 # For older versions or manual component management
