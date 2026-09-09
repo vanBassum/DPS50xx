@@ -51,7 +51,12 @@ ModbusError ModbusPsu::Poll()
             const uint16_t i = static_cast<uint16_t>(r.address - start);
             uint32_t raw = buf[i];
             if (r.words == 2)
-                raw = (raw << 16) | buf[i + 1];   // high word first
+            {
+                const uint32_t other = buf[i + 1];
+                raw = (r.order == PsuWordOrder::LowFirst)
+                          ? (other << 16) | raw
+                          : (raw << 16) | other;
+            }
             r.value = static_cast<float>(raw) * r.scale;
         }
 

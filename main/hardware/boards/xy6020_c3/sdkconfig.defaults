@@ -1,0 +1,17 @@
+# Board overlay: XY6020L controller on an ESP32-C3 SuperMini.
+#
+# Overlays the common root sdkconfig.defaults and wins on conflicts — see the
+# SDKCONFIG_DEFAULTS composition in the root CMakeLists.txt.
+
+CONFIG_IDF_TARGET="esp32c3"
+
+# Console on the chip's own USB Serial/JTAG, not UART0.
+#
+# UART0's default pins on the ESP32-C3 are GPIO20/21. This board's Modbus pins
+# are 3/4, so they do not collide today — but the console belongs on the native
+# USB regardless: it is the SuperMini's only port, and leaving UART0 enabled is
+# how a later pin change silently becomes a pad shared with the console.
+#
+# The SuperMini's only port IS the native USB, so this is also what the console
+# should have been on from the start.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y

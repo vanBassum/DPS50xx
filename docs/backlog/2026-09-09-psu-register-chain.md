@@ -1,49 +1,57 @@
 # The XY6020L, on the register chain
 
-The chain landed on 2026-09-09: a driver declares self-describing readings and everything above
-it walks them — see
-`../reasoning/2026-09-09-18h32-a-driver-that-declares-its-registers-is-the-schema.md` for why,
-and `interfaces/Psu.h` for the mechanism. `DPS5020` is now a thirteen-row table on top of
-`ModbusPsu`, which is what a second supply is supposed to be too.
+The chain landed on 2026-09-09 and so did the supply: `XY6020L` is a twenty-row table on
+`ModbusPsu`, and `xy6020_c3` binds it. Nothing in `app/`, `strux/` or the frontend was touched to
+make a second supply work — see
+`../reasoning/2026-09-09-18h32-a-driver-that-declares-its-registers-is-the-schema.md`.
 
-This is what the second supply still owes.
+What is left is the half that needs hardware, plus the writes a generic table cannot carry.
 
-## The XY6020L
+## Owed by a bench
 
-- [ ] **The register map must come from the datasheet, not from memory.** Addresses, scales,
-      which registers are 32-bit pairs, and the protection vocabulary all need checking against
-      a real unit before anything is written down. This is the one part with no code answer.
-- [ ] `drivers/XY6020L.{h,cpp}` — the table, this supply's limits (60 V where the DPS is 50),
-      and its own protection labels. `ReadNumber`'s `words = 2` covers the Ah/Wh accumulators;
-      it is implemented, high word first, and **unexercised** — that assumption is the first
-      thing to check on hardware.
-- [ ] Board folders. A board folder already means MCU + wiring + which drivers get bound, so
-      `xy6020_esp32` / `xy6020_c3` uses the existing mechanism. If the 2×2 gets annoying, a
-      second cache var (`-DPSU=`) is a later refactor — do not build it yet. Remember `-DBOARD`
-      goes on `set-target` too, and `-B build-xy -DSDKCONFIG=sdkconfig-xy` to keep the
-      configured trees apart.
-- [ ] Writable extras (OVP/OCP/OPP thresholds, memory-group recall, the output timer) as a
-      typed `psu adv` command, not through the generic path: they need range validation and
-      write ordering, which a table cannot carry. Note `readArgs` is variadic with literal
-      names, so a runtime-table-driven argument list has no `help list` at all.
+The register map is **bench-unverified in full** — it comes from a reverse-engineered Arduino
+library plus the vendor's protection codes, not from a readable datasheet, and
+`../reasoning/2026-09-09-18h52-a-16-bit-register-cannot-hold-1200-watts.md` says how much of it
+arithmetic could settle (one claim) and how much it could not (the rest). `next-up.md` carries the
+check order.
+
+- [ ] **The three transactions per poll.** This map has gaps, so `Poll()` splits into
+      0x0000–0x0012, 0x0016–0x0017 and 0x001D. Confirm that is what appears on the wire, and
+      decide whether `memoryGroup` is worth its own round trip at 1 Hz — dropping it makes the
+      poll two transactions.
+- [ ] **Negative temperatures.** 0x000D/0x000E are read as unsigned. If the supply encodes below
+      zero as two's complement, a cold probe reads ~6553 °C. Needs a signed flag on the register
+      or a driver-side fixup; nothing in the chain has needed signedness yet.
+- [ ] **`xy6020_esp32`, if a second board is ever wired.** Deliberately not created: the only
+      XY6020L wiring that exists is the C3's (GPIO3/4 at 115200), and inventing a board folder
+      for hardware nobody has built is how a wrong pinout gets flashed.
+
+## Owed by code
+
+- [ ] **Writable extras as a typed `psu adv` command** — OVP/OCP/OPP/LVP/OTP thresholds, the
+      capacity and run-time limits, memory-group recall. These need range validation and write
+      ordering, which a table cannot carry, and recalling a preset moves every setpoint at once.
+      Note `readArgs` is variadic with literal names, so a runtime-table-driven argument list has
+      no `help list` at all.
+- [ ] **The preset blocks at 0x0050+** (fourteen registers per group, ten groups) are not in the
+      table and probably should not be polled. They are the `psu adv` command's business.
 
 ## Open
 
-- [ ] **Build-time supply choice, or auto-detect.** With both drivers compiled in, the supply
-      could be detected at boot — a DPS5020 answers `0x000B` with `5020` — giving one firmware
-      for both. Attractive, but it adds runtime branching and a detection failure mode. Default
-      to the build-time choice unless one binary is actually wanted.
-- [ ] **The repo name goes stale.** `DPS50xx` stops describing the product once a second supply
-      is in it. Rename, or accept it. Not urgent, and cheap either way.
-- [ ] **`psu.*` settings are shared across supplies.** `psu.poll` and `psu.telem` are fine as
-      they are; a per-supply setting would need a naming rule that fits inside the 15-char NVS
-      limit, and there is no room for one. Avoid needing it.
-- [ ] **How many readings is too many for a 1 Hz poll.** The XY's map is bigger than the DPS's
-      thirteen rows, and `psu get` now carries five fields per reading rather than one value.
-      The reply is outbound and chunked, so the 4096-byte inbound window does not apply, but the
-      browser polls every second — measure before assuming it is free. A gap in the map also
-      costs an extra Modbus transaction per block, which the DPS never paid.
-- [ ] **`MAX_CURRENT` was 20.0 A and the hardware accepts more** (see `next-up.md`). The limit
-      now lives on `DPS5020`'s `setCurrent_` row, still at 20 A, so the decision is unchanged
-      and merely moved: either the cap is the product's rating, or it follows what the register
-      accepts.
+- [ ] **Build-time supply choice, or auto-detect.** Both drivers are compiled in now, so the
+      board folder is the only thing selecting between them. A DPS5020 answers 0x000B with 5020
+      and an XY6020L answers 0x0016 with its own model number, so one firmware could detect which
+      is on the wire — at the cost of runtime branching, a detection failure mode, and the fact
+      that the two supplies want DIFFERENT BAUD RATES (9600 vs 115200), which makes detection a
+      two-speed probe rather than one read.
+- [ ] **The repo name is now wrong.** `DPS50xx` describes one of two supported supplies. Rename,
+      or accept it.
+- [ ] **`psu.*` settings are shared across supplies.** Fine as they are; a per-supply setting
+      would need a naming rule inside the 15-char NVS limit, and there is no room for one.
+- [ ] **`psu get` is 20 readings now**, each with five or seven fields, polled every second by the
+      browser. The reply is outbound and chunked so the 4096-byte inbound window does not apply —
+      but measure it before assuming it is free.
+- [ ] **`setCurrent` maxes at 20.0 A on both supplies and the DPS hardware accepts more** (a front
+      panel set 20.1 A). The limit now lives on each driver's own row, so the decision is
+      unchanged and merely moved: either the cap is the product's rating, or it follows what the
+      register accepts.

@@ -9,9 +9,27 @@ Last updated 2026-09-09.
 
 ## Now
 
-**The register chain is built for both boards and flashed to neither.** A driver now declares
+**The XY6020L driver and `xy6020_c3` exist and no XY6020L has ever answered them.** The whole
+register map is unverified — reverse-engineered library plus vendor protection codes, see
+`reasoning/2026-09-09-18h52`. Check in this order, because it is the order in which a wrong answer
+is visible:
+
+1. **Nothing answers at all** → the TX/RX orientation. `BoardConfig.h` reads GPIO4 as the
+   XY's TX (so the ESP's RX) and GPIO3 as its RX. If the supply is silent, swap those two
+   before suspecting anything else, then the 115200 baud (a DPS50xx runs at 9600).
+2. **WiFi associates but never gets an address** → the pins, not the firmware. GPIO3/4 are
+   unproven near this module's badly-placed antenna; 21/20 and 0/1 both broke association with
+   the UART never configured, and only 6/5 is proven. See `reasoning/2026-08-26-21h19`.
+3. **Power reads 10× low** → the scale is 0.01 W, not the 0.1 W the range argument chose.
+4. **Charge/energy jump around** → the 32-bit word order is high-word-first, not low.
+5. **Protection shows the wrong state name** → the eleven codes are believed, not verified.
+
+Also confirm the poll splits into exactly three Modbus transactions (this map has gaps) and that
+telemetry lands in the same Influx series as the DPS's — the shared field names are deliberate.
+
+**The register chain is built for three boards and flashed to none.** A driver now declares
 self-describing readings and `psu get`, the telemetry point, setpoint validation and the
-dashboard all walk them — see `reasoning/2026-09-09-18h32`. esp32 builds at 26% free, C3 at 21%.
+dashboard all walk them — see `reasoning/2026-09-09-18h32`. esp32 builds at 26% free, both C3 boards at 21%.
 Nothing has touched a supply yet, and three things are worth watching on the first flash:
 the poll must still cost exactly ONE Modbus transaction for the DPS's contiguous map, the
 telemetry field names must be unchanged (`voltage`, `inputVoltage`, … — a rename silently

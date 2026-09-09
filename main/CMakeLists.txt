@@ -50,6 +50,7 @@ set(APP_SOURCES
     # DPS5020 is a register table on top of it, and a second supply is another.
     "hardware/drivers/ModbusPsu.cpp"
     "hardware/drivers/DPS5020.cpp"
+    "hardware/drivers/XY6020L.cpp"
 )
 
 set(SOURCE_FILES_LIST

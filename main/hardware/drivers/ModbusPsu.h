@@ -19,21 +19,33 @@
 // register address.
 // ──────────────────────────────────────────────────────────────
 
+/// Which half of a two-register value comes first. There is no convention worth
+/// trusting here: the DPS50xx has no 32-bit register at all, and the XY6020L
+/// puts the LOW word at the lower address (its map names 0x0006 charge and
+/// 0x0007 charge-high). So the table says which, per register.
+enum class PsuWordOrder : uint8_t
+{
+    HighFirst,
+    LowFirst,
+};
+
 /// One reading that lives at a Modbus holding-register address. Adds to
 /// PsuReading exactly what the wire needs and the application never asked for.
 struct PsuRegister : PsuReading
 {
-    const uint16_t address;
-    const uint8_t  words;   ///< 1, or 2 for a 32-bit value in a register pair
-    const float    scale;   ///< raw * scale = value, e.g. 0.01
+    const uint16_t     address;
+    const uint8_t      words;   ///< 1, or 2 for a 32-bit value in a register pair
+    const float        scale;   ///< raw * scale = value, e.g. 0.01
+    const PsuWordOrder order;   ///< only meaningful when words == 2
 
 protected:
     PsuRegister(const char* key, const char* label, const char* unit, const char* telemKey,
                 PsuKind kind, PsuAccess access, float min, float max,
                 const char* const* enumLabels, uint8_t enumCount,
-                uint16_t address, uint8_t words, float scale)
+                uint16_t address, uint8_t words, float scale,
+                PsuWordOrder order = PsuWordOrder::HighFirst)
         : PsuReading(key, label, unit, telemKey, kind, access, min, max, enumLabels, enumCount),
-          address(address), words(words), scale(scale) {}
+          address(address), words(words), scale(scale), order(order) {}
 };
 
 // ── Table sugar ───────────────────────────────────────────────
@@ -41,16 +53,16 @@ protected:
 // driver is the thing people will read: `WriteNumber` says at a glance what
 // `PsuAccess::ReadWrite` in argument position seven does not.
 
-/// A read-only measurement. `words` > 1 covers the 32-bit accumulators an
-/// XY6020L keeps (Ah, Wh) — high word first, which is the Modbus convention but
-/// is UNVERIFIED against real hardware until that driver lands.
+/// A read-only measurement. `words = 2` covers the 32-bit accumulators an
+/// XY6020L keeps (Ah, Wh); pass the word order with it, and see PsuWordOrder for
+/// why there is no default worth trusting.
 struct ReadNumber : PsuRegister
 {
     ReadNumber(const char* key, const char* label, const char* unit,
                uint16_t address, float scale, const char* telemKey = nullptr,
-               uint8_t words = 1)
+               uint8_t words = 1, PsuWordOrder order = PsuWordOrder::HighFirst)
         : PsuRegister(key, label, unit, telemKey, PsuKind::Number, PsuAccess::Read,
-                      0.0f, 0.0f, nullptr, 0, address, words, scale) {}
+                      0.0f, 0.0f, nullptr, 0, address, words, scale, order) {}
 };
 
 /// A setpoint. min/max are the supply's own range and travel to the UI, which is
