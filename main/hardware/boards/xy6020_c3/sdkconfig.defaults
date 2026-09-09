@@ -5,13 +5,23 @@
 
 CONFIG_IDF_TARGET="esp32c3"
 
-# Console on the chip's own USB Serial/JTAG, not UART0.
+# Console output reaches the SuperMini's USB-C port — its only port — but as the
+# SECONDARY console, not the primary.
 #
-# UART0's default pins on the ESP32-C3 are GPIO20/21. This board's Modbus pins
-# are 3/4, so they do not collide today — but the console belongs on the native
-# USB regardless: it is the SuperMini's only port, and leaving UART0 enabled is
-# how a later pin change silently becomes a pad shared with the console.
+# The primary console is a full VFS driver whose write BLOCKS waiting for FIFO
+# space, which means waiting for a USB host. ConsoleManager::LogOutput starts with
+# vprintf and sits under esp_log_set_vprintf, so with USB primary every task's log
+# line could stall that task — the Wi-Fi and lwIP tasks included, which drops
+# inbound frames indiscriminately. Upstream measured 78 % packet loss this way with
+# every command counter reading clean; here it presented as the station being
+# dropped for idleness (reason 4) and the recovery AP opening. The secondary console
+# is a best-effort ROM path that drops instead of waiting.
 #
-# The SuperMini's only port IS the native USB, so this is also what the console
-# should have been on from the start.
-CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+# ConsoleManager.cpp refuses to build if USB is made primary again, because the
+# comment that used to live here is what stopped anyone looking. See
+# reasoning/2026-09-09-20h40 (from Strux) and Strux commit 7a7f22e.
+#
+# UART0's default pins are GPIO20/21, which no board here wires — Modbus is on 6/5
+# (dps50xx_c3) and 3/4 (xy6020_c3). Nothing is lost and nothing collides.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y

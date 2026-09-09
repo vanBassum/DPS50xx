@@ -9,16 +9,15 @@ What is left is the half that needs hardware, plus the writes a generic table ca
 
 ## Owed by a bench
 
-The register map is **bench-unverified in full** — it comes from a reverse-engineered Arduino
-library plus the vendor's protection codes, not from a readable datasheet, and
-`../reasoning/2026-09-09-18h52-a-16-bit-register-cannot-hold-1200-watts.md` says how much of it
-arithmetic could settle (one claim) and how much it could not (the rest). `next-up.md` carries the
-check order.
+Most of the map answered on the first flash (see `next-up.md`); what is left needs a LOAD on the
+output, which is a bench decision rather than a code one.
 
-- [ ] **The three transactions per poll.** This map has gaps, so `Poll()` splits into
-      0x0000–0x0012, 0x0016–0x0017 and 0x001D. Confirm that is what appears on the wire, and
-      decide whether `memoryGroup` is worth its own round trip at 1 Hz — dropping it makes the
-      poll two transactions.
+- [ ] **The 0.1 W power scale and the 32-bit word order.** Both readings are zero with the output
+      off, so neither is verified. Power 10× low means 0.01 W; charge/energy jumping means the
+      word order is high-first.
+- [ ] **`memoryGroup` at 0x001D** answered every poll but was once late enough to desync the next
+      one. It is also the reading that costs the poll a third transaction. Drop it if that
+      transient becomes a pattern.
 - [ ] **Negative temperatures.** 0x000D/0x000E are read as unsigned. If the supply encodes below
       zero as two's complement, a cold probe reads ~6553 °C. Needs a signed flag on the register
       or a driver-side fixup; nothing in the chain has needed signedness yet.

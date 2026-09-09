@@ -9,35 +9,52 @@ Last updated 2026-09-09.
 
 ## Now
 
-**The XY6020L driver and `xy6020_c3` exist and no XY6020L has ever answered them.** The whole
-register map is unverified — reverse-engineered library plus vendor protection codes, see
-`reasoning/2026-09-09-18h52`. Check in this order, because it is the order in which a wrong answer
-is visible:
+**The XY6020L runs on hardware.** Flashed to the C3 at `E8:3D:C1:9C:1C:CC` (COM5) on
+2026-09-09 and driven over its own WebSocket. What the unit confirmed:
 
-1. **Nothing answers at all** → the TX/RX orientation. `BoardConfig.h` reads GPIO4 as the
-   XY's TX (so the ESP's RX) and GPIO3 as its RX. If the supply is silent, swap those two
-   before suspecting anything else, then the 115200 baud (a DPS50xx runs at 9600).
-2. **WiFi associates but never gets an address** → the pins, not the firmware. GPIO3/4 are
-   unproven near this module's badly-placed antenna; 21/20 and 0/1 both broke association with
-   the UART never configured, and only 6/5 is proven. See `reasoning/2026-08-26-21h19`.
-3. **Power reads 10× low** → the scale is 0.01 W, not the 0.1 W the range argument chose.
-4. **Charge/energy jump around** → the 32-bit word order is high-word-first, not low.
-5. **Protection shows the wrong state name** → the eleven codes are believed, not verified.
+- `XY6020L: online (addr=1)` 2.6 s after boot; 30 s of steady polling with **zero** Modbus
+  warnings. TX 3 / RX 4 at 115200 is right, so the wiring reading was right too.
+- Scales confirmed by plausibility: input 18.75 V, temperature **22.5 °C** (room), setpoints
+  4.00 V / 10.00 A off the front panel. All 0.01 except temperature's 0.1.
+- `psu set` writes, echoes and refuses correctly against the DRIVER's own limits:
+  `"Set Voltage out of range (0-60 V)"` at 61 V, and `"this supply has no 'backlight'"` — from
+  the same handler that accepts backlight on a DPS5020.
+- Protection reads `None` with its label; all twenty readings arrive in `psu get`.
 
-Also confirm the poll splits into exactly three Modbus transactions (this map has gaps) and that
-telemetry lands in the same Influx series as the DPS's — the shared field names are deliberate.
+**Three things the bench has NOT settled, and two need a load on the output.**
 
-**The register chain is built for three boards and flashed to none.** A driver now declares
-self-describing readings and `psu get`, the telemetry point, setpoint validation and the
-dashboard all walk them — see `reasoning/2026-09-09-18h32`. esp32 builds at 26% free, both C3 boards at 21%.
-Nothing has touched a supply yet, and three things are worth watching on the first flash:
-the poll must still cost exactly ONE Modbus transaction for the DPS's contiguous map, the
-telemetry field names must be unchanged (`voltage`, `inputVoltage`, … — a rename silently
-orphans the Influx history), and `psu set` refuses against the reading's own min/max now.
+1. **The 0.1 W power scale.** Output was off, so power read 0.00 W and the range argument in
+   `reasoning/2026-09-09-18h52` is still only an argument. Put a load on and compare against the
+   panel: 10× low means the scale is 0.01 W.
+2. **The 32-bit word order** on charge and energy. Both accumulators read 0.000, which is what
+   either word order gives for zero. They must be nonzero to mean anything.
+3. **`model` reads 25858** (0x6502), which is not obviously a product number, and `version`
+   reads 140. Register 0x0016/0x0017 answer *something* every poll; whether that something is
+   the model is unconfirmed, and it is display-only either way.
 
-**`psu get`'s reply shape changed, so anything scripted against it breaks.** Flat fields became
-`readings: { <key>: { label, unit, kind, value, valueLabel?, access, min?, max? } }`. `psu set`
-takes the same arguments as before and echoes only the keys the supply actually has.
+**One transient worth knowing, not yet a bug.** At 23 s of the first boot, one poll logged
+`TX echo detected: 7 bytes in RX after send` and then timed out reading `0x001D`. Seven bytes is
+exactly one single-register reply, so that is a LATE answer found in the buffer by the next
+send — the supply being slow once, the same shape as `reasoning/2026-08-11-22h33`. It has not
+recurred in 30 s of steady state and the device never went offline. If it becomes frequent,
+drop `memoryGroup` from the table: it is the only reading past the main block and it costs the
+poll its third transaction.
+
+**`dps50xx_c3` has the console fix and has not been flashed with it.** Same overlay change, and
+`reasoning/2026-09-09-19h34` predicts that bench's own WiFi history was partly this. The ESP32
+board was never affected — it has a real UART bridge, so its console was always UART-primary.
+
+**An EXISTING sdkconfig keeps the old console setting, so the guard fires until it is
+regenerated.** `sdkconfig.defaults` only seeds a *fresh* config, so the first build after this
+change fails with the `#error` rather than silently keeping USB primary — which is the guard
+working, but the message tells you to change a Kconfig option and not what actually needs doing.
+Delete the stale `sdkconfig` (it is gitignored), or build per board the way CLAUDE.md documents:
+`-DSDKCONFIG=sdkconfig-c3`. The root `sdkconfig` in this tree is still a stale esp32c3 one and
+will fail this way.
+
+**`ConsoleManager.cpp` now holds upstream's guard but not upstream's later log-flood fix**
+(Strux `7449f81`), because only the connectivity fix was wanted. A full `cp -r ../Strux/main/strux`
+supersedes both, and that is the intended way out — this is not fork debt.
 
 **Four fixes want pushing back to Strux.**
 
