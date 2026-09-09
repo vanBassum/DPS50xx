@@ -30,8 +30,39 @@ esp32_devkit against `relay.py` on a LAN host, 2026-08-02 and 2026-08-05:
 - One later build was pushed over the relay with no serial cable attached.
 - Liveness: recovery from failed connects, and 100 s fully idle without losing the pipe.
 
-Not proven: `wss://` (item 2 below), and anything with more than one browser or one
-operator.
+Not proven: anything with more than one browser or one operator.
+
+## `wss://` through the public relay serves a broken bundle (2026-09-09)
+
+Tried for the first time — `wss://strux.vanbassum.com/device`, the deployed server behind an
+Authentik proxy, rather than `relay.py` on the LAN over `ws://`. The device connects and is
+listed, but opening `/devices/esp32-e83dc19c1ccc/` renders a blank page with one console error:
+
+    Uncaught SyntaxError: Unexpected token 'var'    index-kyco_E2K.js:8
+
+**The device side is exonerated, byte for byte, over the relay's own command path.** Pulling the
+same asset with `web read` (473 chunks) returns 241,889 bytes whose sha256 equals the build
+output, with a header declaring `contentType: application/javascript` and
+`contentEncoding: gzip`; the device's HTTP server returns the identical bytes, and the
+decompressed bundle passes `node --check`. So the bytes leaving the device are correct and the
+corruption is downstream — the relay, its cache, or the proxy in front of it.
+
+Why the error points at a transform rather than a truncation: line 8 of that bundle opens with
+`` `+f.stack}}var gt= ``, the closing half of a template literal whose newline is INSIDE the
+backticks (line 7 opens it). A parser reaching `var` in a bad state there means the preceding
+bytes were damaged, not that the file ended early — and the first seven lines parsed, so it is
+not "gzip served as text" either.
+
+Next diagnostic, which needs a browser logged into the SSO: in DevTools → Network, compare that
+file's transferred size against **241,889** (correct, gzip) and check whether
+`Content-Encoding: gzip` survived the proxy. Also whether the CSS (20 KB, far fewer chunks)
+arrives intact — if only the 473-chunk JS is damaged, the bug is size- or chunk-dependent.
+
+One asymmetry found while testing, worth knowing on both sides: **`web read` refuses a leading
+slash.** `assets/index-kyco_E2K.js` returns 200; `/assets/index-kyco_E2K.js` returns
+`{"status":404}`, as does `/index.html`. A relay that passes a URL path straight through gets a
+404 for everything, so the working one must be stripping it — fine, but it is an undocumented
+contract between two repositories and nothing on the device side declares it.
 
 ## Open, in the order that will probably matter
 
