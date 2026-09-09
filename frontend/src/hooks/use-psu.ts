@@ -1,57 +1,37 @@
 import { useEffect, useState, useCallback, useRef } from "react"
 import {
   backend,
-  psuNumber,
-  PSU_KEYS,
   type PsuData,
   type PsuSetResult,
   type PsuSetpoints,
 } from "@/lib/backend"
 import { useConnectionStatus } from "@/hooks/use-connection-status"
 
-export interface HistoryPoint {
-  time: string
-  voltage: number
-  current: number
-  power: number
-}
-
-/** 5 minutes at the default 1 s poll. History is client-side and deliberately
- *  not persisted — the device's own telemetry (psu.telem) is what survives a
- *  reload, and it goes to InfluxDB through the relay. */
-const MAX_HISTORY = 300
-
 /** The keys `psu set` echoes back. Named here rather than derived, because the
  *  echo is a promise about specific setpoints and not a schema. */
-const ECHOED = [
-  PSU_KEYS.setVoltage,
-  PSU_KEYS.setCurrent,
-  PSU_KEYS.outputOn,
-  PSU_KEYS.keyLock,
-  PSU_KEYS.backlight,
-] as const
+const ECHOED = ["setVoltage", "setCurrent", "outputEnabled", "keyLock", "backlight"] as const
 
 /** Fold the reply's echo into the readings, so a button feels immediate instead
  *  of waiting for the next poll. A key the supply does not have is simply
  *  absent from both sides. */
 function applyEcho(prev: PsuData, res: PsuSetResult): PsuData {
-  const readings = { ...prev.readings }
+  const capabilities = { ...prev.capabilities }
   for (const key of ECHOED) {
     const echoed = res[key]
-    const reading = readings[key]
-    if (echoed === undefined || reading === undefined) continue
-    readings[key] = {
-      ...reading,
+    const capability = capabilities[key]
+    if (echoed === undefined || capability === undefined) continue
+    capabilities[key] = {
+      ...capability,
       value: typeof echoed === "boolean" ? (echoed ? 1 : 0) : echoed,
+      available: true,
     }
   }
-  return { ...prev, readings }
+  return { ...prev, capabilities }
 }
 
 export function usePsu(pollIntervalMs = 1000) {
   const connection = useConnectionStatus()
   const [data, setData] = useState<PsuData | null>(null)
-  const [history, setHistory] = useState<HistoryPoint[]>([])
   const [error, setError] = useState<string | null>(null)
 
   // The poll must not queue a second request behind a slow one: the device is
@@ -63,27 +43,7 @@ export function usePsu(pollIntervalMs = 1000) {
     if (inFlight.current) return
     inFlight.current = true
     try {
-      const d = await backend.getPsu()
-      setData(d)
-
-      if (d.online) {
-        setHistory((prev) => {
-          const next = [
-            ...prev,
-            {
-              time: new Date().toLocaleTimeString([], {
-                hour: "2-digit",
-                minute: "2-digit",
-                second: "2-digit",
-              }),
-              voltage: psuNumber(d, PSU_KEYS.outVoltage),
-              current: psuNumber(d, PSU_KEYS.outCurrent),
-              power: psuNumber(d, PSU_KEYS.outPower),
-            },
-          ]
-          return next.length > MAX_HISTORY ? next.slice(-MAX_HISTORY) : next
-        })
-      }
+      setData(await backend.getPsu())
     } catch {
       /* a dropped poll is not worth surfacing — the connection dot already says */
     } finally {
@@ -120,5 +80,22 @@ export function usePsu(pollIntervalMs = 1000) {
   const setOutput = useCallback((on: boolean) => apply({ output: on }), [apply])
   const setKeyLock = useCallback((locked: boolean) => apply({ keyLock: locked }), [apply])
 
-  return { data, history, error, apply, setVoltage, setCurrent, setOutput, setKeyLock, refresh }
+  /** Write one capability by name and refresh, so a protections panel needs no
+   *  echo protocol of its own. */
+  const write = useCallback(
+    async (key: string, value: number) => {
+      try {
+        const res = await backend.writePsu(key, value)
+        setError(res.ok ? null : (res.error ?? "command failed"))
+        if (res.ok) await refresh()
+        return res.ok
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "command failed")
+        return false
+      }
+    },
+    [refresh],
+  )
+
+  return { data, error, apply, write, setVoltage, setCurrent, setOutput, setKeyLock, refresh }
 }

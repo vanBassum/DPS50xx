@@ -1,30 +1,35 @@
 import { useState } from "react"
-import { usePsu, type HistoryPoint } from "@/hooks/use-psu"
+import { usePsu } from "@/hooks/use-psu"
 import {
+  psuAvailable,
+  psuCapability,
   psuFlag,
+  psuGroup,
   psuNumber,
-  psuReading,
   PSU_KEYS,
+  type PsuCapability,
   type PsuData,
-  type PsuReading,
 } from "@/lib/backend"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { PowerIcon, ZapIcon, LockIcon, UnlockIcon } from "lucide-react"
 import {
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ReferenceLine,
-  ResponsiveContainer,
-  Legend,
-} from "recharts"
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
+import { PowerIcon, ZapIcon, LockIcon, UnlockIcon, ShieldIcon } from "lucide-react"
+
+// This page consumes CAPABILITIES, never registers. It addresses a handful by
+// meaning (PSU_KEYS: what it reads out, edits and toggles) and renders the rest
+// from the `group` and `kind` the driver sent — so a supply with values this
+// build has never heard of still displays, and nothing here knows that an
+// XY6020L keeps its runtime in three registers or calls an absent probe 8888.
 
 export default function HomePage() {
-  const { data, history, error, setVoltage, setCurrent, setOutput, setKeyLock } = usePsu()
+  const { data, error, write, setVoltage, setCurrent, setOutput, setKeyLock } = usePsu()
 
   return (
     <div className="space-y-6">
@@ -65,216 +70,246 @@ export default function HomePage() {
       )}
 
       {data?.online && (
-        <div className="grid gap-6 lg:grid-cols-[1fr_1fr]">
-          {/* Left column: readouts, status, controls */}
-          <div className="space-y-4">
-            {/* Live readouts */}
-            <div className="grid grid-cols-3 gap-3">
-              <ReadoutCard label="Voltage" value={psuNumber(data, PSU_KEYS.outVoltage)} unit="V" color="text-yellow-500" />
-              <ReadoutCard label="Current" value={psuNumber(data, PSU_KEYS.outCurrent)} unit="A" color="text-cyan-500" />
-              <ReadoutCard label="Power" value={psuNumber(data, PSU_KEYS.outPower)} unit="W" color="text-orange-500" />
-            </div>
-
-            {/* Status bar */}
-            <div className="flex items-center justify-between rounded-lg border bg-card px-4 py-2.5 text-sm">
-              <StatusItem label="Input" value={`${psuNumber(data, PSU_KEYS.inVoltage).toFixed(1)}V`} />
-              <Divider />
-              <StatusItem
-                label="Mode"
-                value={psuFlag(data, PSU_KEYS.constantCurrent) ? "CC" : "CV"}
-                highlight={psuFlag(data, PSU_KEYS.constantCurrent)}
-              />
-              <Divider />
-              {/* The supply names its own protection codes, so there is no
-                  label table on this side to fall out of date. */}
-              <StatusItem
-                label="Protection"
-                value={psuReading(data, PSU_KEYS.protection)?.valueLabel ?? "?"}
-                highlight={psuNumber(data, PSU_KEYS.protection) !== 0}
-              />
-            </div>
-
-            {/* Controls */}
-            <div className="rounded-xl border bg-card p-6 text-card-foreground shadow-sm space-y-5">
-              <SetpointRow reading={psuReading(data, PSU_KEYS.setVoltage)} onSet={setVoltage} />
-              <SetpointRow reading={psuReading(data, PSU_KEYS.setCurrent)} onSet={setCurrent} />
-
-              <div className="flex items-center gap-3 pt-2">
-                <Button
-                  className={`flex-1 h-12 text-base font-bold ${
-                    psuFlag(data, PSU_KEYS.outputOn)
-                      ? "bg-emerald-600 hover:bg-emerald-700 text-white"
-                      : "bg-red-600 hover:bg-red-700 text-white"
-                  }`}
-                  onClick={() => setOutput(!psuFlag(data, PSU_KEYS.outputOn))}
-                >
-                  <PowerIcon className="mr-2 size-5" />
-                  {psuFlag(data, PSU_KEYS.outputOn) ? "OUTPUT ON" : "OUTPUT OFF"}
-                </Button>
-
-                {psuReading(data, PSU_KEYS.keyLock) && (
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    className="h-12 w-12 shrink-0"
-                    onClick={() => setKeyLock(!psuFlag(data, PSU_KEYS.keyLock))}
-                    title={psuFlag(data, PSU_KEYS.keyLock) ? "Unlock keys" : "Lock keys"}
-                  >
-                    {psuFlag(data, PSU_KEYS.keyLock) ? (
-                      <LockIcon className="size-5 text-amber-500" />
-                    ) : (
-                      <UnlockIcon className="size-5" />
-                    )}
-                  </Button>
-                )}
-              </div>
-            </div>
-
-            <ExtraReadings data={data} />
+        <div className="mx-auto max-w-2xl space-y-4">
+          {/* Live readouts */}
+          <div className="grid grid-cols-3 gap-3">
+            <ReadoutCard label="Voltage" value={psuNumber(data, PSU_KEYS.outputVoltage)} unit="V" color="text-yellow-500" />
+            <ReadoutCard label="Current" value={psuNumber(data, PSU_KEYS.outputCurrent)} unit="A" color="text-cyan-500" />
+            <ReadoutCard label="Power" value={psuNumber(data, PSU_KEYS.outputPower)} unit="W" color="text-orange-500" />
           </div>
 
-          {/* Right column: charts */}
-          {history.length > 1 && (
-            <div className="space-y-4">
-              <VoltageCurrentChart
-                history={history}
-                setVoltage={psuNumber(data, PSU_KEYS.setVoltage)}
-                setCurrent={psuNumber(data, PSU_KEYS.setCurrent)}
-              />
-              <PowerChart history={history} />
+          {/* Status bar */}
+          <div className="flex items-center justify-between rounded-lg border bg-card px-4 py-2.5 text-sm">
+            <StatusItem label="Input" value={`${psuNumber(data, PSU_KEYS.inputVoltage).toFixed(1)}V`} />
+            <Divider />
+            <StatusItem
+              label="Mode"
+              value={psuFlag(data, PSU_KEYS.constantCurrent) ? "CC" : "CV"}
+              highlight={psuFlag(data, PSU_KEYS.constantCurrent)}
+            />
+            <Divider />
+            {/* The supply names its own protection codes, so there is no label
+                table on this side to fall out of date. This is the current TRIP
+                STATE — the configured thresholds are behind Protections. */}
+            <StatusItem
+              label="Protection"
+              value={psuCapability(data, PSU_KEYS.protectionState)?.valueLabel ?? "?"}
+              highlight={psuNumber(data, PSU_KEYS.protectionState) !== 0}
+            />
+          </div>
+
+          {/* Controls */}
+          <div className="rounded-xl border bg-card p-6 text-card-foreground shadow-sm space-y-5">
+            <SetpointRow capability={psuCapability(data, PSU_KEYS.setVoltage)} onSet={setVoltage} />
+            <SetpointRow capability={psuCapability(data, PSU_KEYS.setCurrent)} onSet={setCurrent} />
+
+            <div className="flex items-center gap-3 pt-2">
+              <Button
+                className={`flex-1 h-12 text-base font-bold ${
+                  psuFlag(data, PSU_KEYS.outputEnabled)
+                    ? "bg-emerald-600 hover:bg-emerald-700 text-white"
+                    : "bg-red-600 hover:bg-red-700 text-white"
+                }`}
+                onClick={() => setOutput(!psuFlag(data, PSU_KEYS.outputEnabled))}
+              >
+                <PowerIcon className="mr-2 size-5" />
+                {psuFlag(data, PSU_KEYS.outputEnabled) ? "OUTPUT ON" : "OUTPUT OFF"}
+              </Button>
+
+              {psuCapability(data, PSU_KEYS.keyLock) && (
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="h-12 w-12 shrink-0"
+                  onClick={() => setKeyLock(!psuFlag(data, PSU_KEYS.keyLock))}
+                  title={psuFlag(data, PSU_KEYS.keyLock) ? "Unlock keys" : "Lock keys"}
+                >
+                  {psuFlag(data, PSU_KEYS.keyLock) ? (
+                    <LockIcon className="size-5 text-amber-500" />
+                  ) : (
+                    <UnlockIcon className="size-5" />
+                  )}
+                </Button>
+              )}
             </div>
-          )}
+
+            <div className="flex items-center justify-between gap-3 border-t pt-4">
+              <PresetSelect capability={psuCapability(data, PSU_KEYS.activePreset)} />
+              <ProtectionsDialog data={data} write={write} />
+            </div>
+          </div>
+
+          <SessionCard data={data} />
         </div>
       )}
     </div>
   )
 }
 
-// ── Charts ───────────────────────────────────────────────────
+// ── Session ──────────────────────────────────────────────────
+//
+// Whatever the driver grouped as `session`: charge, energy, runtime, temps. No
+// key list here — a supply that accumulates something else shows it without
+// this component changing.
 
-// Series colours stay literal — a trace's colour is its identity, and these
-// match the readout cards above. Everything structural (grid, ticks, tooltip)
-// comes from the theme's CSS variables so the charts follow light/dark with the
-// rest of the shell instead of being pinned to the old dark-only palette.
-const VOLTAGE_COLOR = "#eab308"
-const CURRENT_COLOR = "#06b6d4"
-const POWER_COLOR = "#f97316"
+function SessionCard({ data }: { data: PsuData }) {
+  const entries = psuGroup(data, "session")
+  if (entries.length === 0) return null
 
-const chartStyle = {
-  grid: "var(--border)",
-  tooltip: {
-    backgroundColor: "var(--card)",
-    border: "1px solid var(--border)",
-    borderRadius: 6,
-    color: "var(--card-foreground)",
-  },
-  tick: { fill: "var(--muted-foreground)", fontSize: 11 },
-  label: { color: "var(--muted-foreground)" },
-}
-
-function VoltageCurrentChart({
-  history,
-  setVoltage,
-  setCurrent,
-}: {
-  history: HistoryPoint[]
-  setVoltage: number
-  setCurrent: number
-}) {
   return (
-    <div className="rounded-xl border bg-card p-4 shadow-sm">
-      <div className="mb-2 text-xs font-medium text-muted-foreground">Voltage &amp; Current</div>
-      <ResponsiveContainer width="100%" height={220}>
-        <LineChart data={history}>
-          <CartesianGrid strokeDasharray="3 3" stroke={chartStyle.grid} />
-          <XAxis dataKey="time" tick={chartStyle.tick} interval="preserveStartEnd" minTickGap={60} />
-          <YAxis
-            yAxisId="v"
-            tick={chartStyle.tick}
-            width={40}
-            domain={[0, "auto"]}
-            label={{ value: "V", position: "insideTopLeft", fill: VOLTAGE_COLOR, fontSize: 11, dy: -10 }}
-          />
-          <YAxis
-            yAxisId="a"
-            orientation="right"
-            tick={chartStyle.tick}
-            width={40}
-            domain={[0, "auto"]}
-            label={{ value: "A", position: "insideTopRight", fill: CURRENT_COLOR, fontSize: 11, dy: -10 }}
-          />
-          <Tooltip contentStyle={chartStyle.tooltip} labelStyle={chartStyle.label} />
-          <Legend />
-          {/* The setpoints as dashed references: how far the output is from what
-              was asked for should be readable without comparing two numbers. */}
-          <ReferenceLine
-            yAxisId="v"
-            y={setVoltage}
-            stroke={VOLTAGE_COLOR}
-            strokeDasharray="6 3"
-            strokeOpacity={0.5}
-            label={{ value: `${setVoltage.toFixed(1)}V`, fill: VOLTAGE_COLOR, fontSize: 10, position: "left" }}
-          />
-          <ReferenceLine
-            yAxisId="a"
-            y={setCurrent}
-            stroke={CURRENT_COLOR}
-            strokeDasharray="6 3"
-            strokeOpacity={0.5}
-            label={{ value: `${setCurrent.toFixed(1)}A`, fill: CURRENT_COLOR, fontSize: 10, position: "right" }}
-          />
-          <Line
-            yAxisId="v"
-            type="monotone"
-            dataKey="voltage"
-            name="Voltage"
-            stroke={VOLTAGE_COLOR}
-            strokeWidth={2}
-            dot={false}
-            isAnimationActive={false}
-          />
-          <Line
-            yAxisId="a"
-            type="monotone"
-            dataKey="current"
-            name="Current"
-            stroke={CURRENT_COLOR}
-            strokeWidth={2}
-            dot={false}
-            isAnimationActive={false}
-          />
-        </LineChart>
-      </ResponsiveContainer>
+    <div className="rounded-xl border bg-card p-4 text-card-foreground shadow-sm">
+      <div className="mb-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        Session
+      </div>
+      <div className="grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-3">
+        {entries.map(([key, c]) => (
+          <div key={key} className="flex items-baseline justify-between gap-2">
+            <span className="text-xs text-muted-foreground">{c.label}</span>
+            <span className="font-mono text-sm font-medium tabular-nums">{format(c)}</span>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
 
-function PowerChart({ history }: { history: HistoryPoint[] }) {
+/** The only presentation knowledge this file needs, and all of it comes from
+ *  `kind`: seconds become HH:MM:SS, a code becomes its name, and a capability
+ *  the supply has no value for becomes an em dash rather than a number. */
+function format(c: PsuCapability): string {
+  if (!psuAvailable(c)) return "—"
+  if (c.kind === "duration") return formatDuration(c.value)
+  if (c.kind === "bool") return c.value !== 0 ? "On" : "Off"
+  if (c.kind === "enum") return c.valueLabel ?? String(c.value)
+  return `${c.value.toFixed(2)}${c.unit ? ` ${c.unit}` : ""}`
+}
+
+function formatDuration(totalSeconds: number): string {
+  const s = Math.max(0, Math.floor(totalSeconds))
+  const pad = (n: number) => String(n).padStart(2, "0")
+  return `${pad(Math.floor(s / 3600))}:${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}`
+}
+
+// ── Preset ───────────────────────────────────────────────────
+//
+// Discrete, so a selector — built from the `options` the device sent, which is
+// why nothing here maps 0 to "M0". Disabled because recalling a preset rewrites
+// every setpoint at once and the firmware does not offer it: showing which one
+// is active is honest, offering to change it would not be.
+
+function PresetSelect({ capability }: { capability?: PsuCapability }) {
+  if (!capability?.options) return <div />
+
+  const current = capability.valueLabel ?? capability.options[Math.round(capability.value)] ?? "?"
+
   return (
-    <div className="rounded-xl border bg-card p-4 shadow-sm">
-      <div className="mb-2 text-xs font-medium text-muted-foreground">Power</div>
-      <ResponsiveContainer width="100%" height={160}>
-        <LineChart data={history}>
-          <CartesianGrid strokeDasharray="3 3" stroke={chartStyle.grid} />
-          <XAxis dataKey="time" tick={chartStyle.tick} interval="preserveStartEnd" minTickGap={60} />
-          <YAxis
-            tick={chartStyle.tick}
-            width={45}
-            domain={[0, "auto"]}
-            label={{ value: "W", position: "insideTopLeft", fill: POWER_COLOR, fontSize: 11, dy: -10 }}
+    <label className="flex items-center gap-2 text-sm">
+      <span className="text-muted-foreground">{capability.label}</span>
+      <select
+        className="h-9 rounded-md border bg-background px-2 font-mono text-sm disabled:opacity-70"
+        value={current}
+        disabled
+        title="Read-only: recalling a preset is not supported yet"
+      >
+        {capability.options.map((option) => (
+          <option key={option} value={option}>
+            {option}
+          </option>
+        ))}
+      </select>
+    </label>
+  )
+}
+
+// ── Protections ──────────────────────────────────────────────
+//
+// The configured thresholds, off the dashboard and behind a button. Editable
+// where the device says `rw`, shown as text where it says `r` — so the derived
+// limits that would need a multi-register write appear without pretending to be
+// settable. Writes go through `psu write`, which validates against the
+// capability's own range on the device.
+
+function ProtectionsDialog({
+  data,
+  write,
+}: {
+  data: PsuData
+  write: (key: string, value: number) => Promise<boolean>
+}) {
+  const entries = psuGroup(data, "protection")
+  if (entries.length === 0) return <div />
+
+  return (
+    <Dialog>
+      <DialogTrigger asChild>
+        <Button variant="outline" size="sm">
+          <ShieldIcon className="mr-2 size-4" />
+          Protections
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Protections</DialogTitle>
+          <DialogDescription>
+            Configured trip thresholds, not live values — the dashboard shows the
+            supply's current trip state.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          {entries.map(([key, c]) => (
+            <ProtectionRow key={key} capKey={key} capability={c} write={write} />
+          ))}
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function ProtectionRow({
+  capKey,
+  capability,
+  write,
+}: {
+  capKey: string
+  capability: PsuCapability
+  write: (key: string, value: number) => Promise<boolean>
+}) {
+  const [draft, setDraft] = useState("")
+  const [busy, setBusy] = useState(false)
+
+  async function commit() {
+    const value = parseFloat(draft)
+    if (isNaN(value)) return
+    setBusy(true)
+    await write(capKey, value)
+    setBusy(false)
+    setDraft("")
+  }
+
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <span className="text-sm">{capability.label}</span>
+      {capability.access === "rw" ? (
+        <div className="flex items-center gap-2">
+          <Input
+            className="h-9 w-28 text-right font-mono"
+            type="number"
+            min={capability.min}
+            max={capability.max}
+            step={0.01}
+            placeholder={psuAvailable(capability) ? capability.value.toFixed(2) : "—"}
+            value={draft}
+            disabled={busy}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commit()
+            }}
           />
-          <Tooltip contentStyle={chartStyle.tooltip} labelStyle={chartStyle.label} />
-          <Line
-            type="monotone"
-            dataKey="power"
-            name="Power"
-            stroke={POWER_COLOR}
-            strokeWidth={2}
-            dot={false}
-            isAnimationActive={false}
-          />
-        </LineChart>
-      </ResponsiveContainer>
+          <span className="w-8 text-xs text-muted-foreground">{capability.unit}</span>
+        </div>
+      ) : (
+        <span className="font-mono text-sm tabular-nums">{format(capability)}</span>
+      )}
     </div>
   )
 }
@@ -304,60 +339,27 @@ function ReadoutCard({
   )
 }
 
-// ── Everything the page has no opinion about ─────────────────
-//
-// The keys in PSU_KEYS are the ones above: charted, edited, toggled. Any OTHER
-// reading the supply registered lands here, described by the device — so an
-// XY6020L's energy counters and input temperature appear without this file
-// changing. For a DPS5020, whose whole map is well known, this renders nothing.
-const KNOWN = new Set<string>(Object.values(PSU_KEYS))
-
-function ExtraReadings({ data }: { data: PsuData }) {
-  const extras = Object.entries(data.readings).filter(([key]) => !KNOWN.has(key))
-  if (extras.length === 0) return null
-
-  return (
-    <div className="rounded-xl border bg-card p-4 text-card-foreground shadow-sm">
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-        {extras.map(([key, r]) => (
-          <div key={key}>
-            <div className="text-xs text-muted-foreground">{r.label}</div>
-            <div className="font-mono text-sm font-medium tabular-nums">
-              {formatReading(r)}
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-function formatReading(r: PsuReading): string {
-  if (r.kind === "bool") return r.value !== 0 ? "On" : "Off"
-  if (r.kind === "enum") return r.valueLabel ?? String(r.value)
-  return `${r.value.toFixed(2)}${r.unit ? ` ${r.unit}` : ""}`
-}
-
-// A setpoint row is driven entirely by its reading: label, unit, current value
-// and the supply's own bounds. A supply without the setpoint renders nothing
-// rather than an input that would be refused.
+// A setpoint row is driven entirely by its capability: label, unit, bounds and
+// the current value. The editable input IS the displayed setpoint — it used to
+// be printed a second time under the label, which was the same number twice. A
+// supply without the setpoint renders nothing rather than an input that would
+// be refused.
 function SetpointRow({
-  reading,
+  capability,
   onSet,
 }: {
-  reading?: PsuReading
+  capability?: PsuCapability
   onSet: (v: number) => void
 }) {
   const [value, setValue] = useState("")
   const [editing, setEditing] = useState(false)
 
-  if (!reading) return null
+  if (!capability) return null
 
-  const { label, unit } = reading
-  const current = reading.value
-  const min = reading.min ?? 0
-  const max = reading.max ?? Number.MAX_SAFE_INTEGER
-  const step = 0.01
+  const { label, unit } = capability
+  const current = capability.value
+  const min = capability.min ?? 0
+  const max = capability.max ?? Number.MAX_SAFE_INTEGER
 
   function handleSubmit() {
     const num = parseFloat(value)
@@ -370,19 +372,14 @@ function SetpointRow({
 
   return (
     <div className="flex items-center justify-between gap-4">
-      <div>
-        <div className="text-sm font-medium">{label}</div>
-        <div className="font-mono text-xs text-muted-foreground">
-          {current.toFixed(2)} {unit}
-        </div>
-      </div>
+      <div className="text-sm font-medium">{label}</div>
       <div className="flex items-center gap-2">
         <Input
           className="w-28 text-right font-mono"
           type="number"
           min={min}
           max={max}
-          step={step}
+          step={0.01}
           placeholder={current.toFixed(2)}
           value={value}
           onChange={(e) => {

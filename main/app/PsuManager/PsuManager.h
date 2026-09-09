@@ -19,12 +19,13 @@
 //   • the framework, for commands            — `psu get` / `psu set`
 //   • the framework, for telemetry           — a point per successful poll
 //
-// It names no register and no supply. Every reading it reports, records or
-// validates comes off the Psu role's chain, which is why an XY6020L's energy
-// counters and input temperature will appear in `psu get`, in the telemetry and
-// in the dashboard without a line changing in this file. The handful of
-// readings the PRODUCT knows by meaning — the setpoints it writes, the values
-// it logs — go through the well-known keys in PsuKey.
+// It names no register and no supply. Every value it reports, records or
+// validates is a CAPABILITY off the Psu role's chain — semantic by the time it
+// arrives, because normalizing a device's storage into meaning happened in the
+// driver. That is why an XY6020L's energy counters and its runtime appear in
+// `psu get`, in the telemetry and in the dashboard without a line changing
+// here. The handful the PRODUCT knows by meaning — the setpoints it writes, the
+// values it logs — go through the well-known keys in PsuKey.
 //
 // The polling lives in a Task rather than a Timer because a Modbus transaction
 // blocks for up to its timeout, and blocking in the FreeRTOS timer service task
@@ -63,8 +64,8 @@ private:
     void PollLoop();
 
     /// One telemetry point per successful poll, taken on the poll task where
-    /// there is stack for it. Fields are whatever the driver gave a telemetry
-    /// name; nothing here lists them.
+    /// there is stack for it. Fields are whatever CAPABILITIES the driver gave a
+    /// telemetry name; nothing here lists them, and no register reaches it.
     void Record(Psu& psu);
 
     /// The status LED mirrors the Modbus link: lit means the supply answered the
@@ -85,8 +86,16 @@ private:
     RequestError Cmd_Get(CommandContext& ctx);
     RequestError Cmd_Set(CommandContext& ctx);
 
+    /// Write ONE reading by key, validated against that reading's own range.
+    /// This is what makes a supply's long tail — protection thresholds and
+    /// whatever the next supply adds — configurable without a new argument
+    /// here per register. `psu set` keeps the core setpoints, because those
+    /// need a specific ORDER that a generic write cannot express.
+    RequestError Cmd_Write(CommandContext& ctx);
+
     inline static CommandEntry commands_[] = {
         { "psu", "get", &InvokeCommand<&PsuManager::Cmd_Get> },
         { "psu", "set", &InvokeCommand<&PsuManager::Cmd_Set> },
+        { "psu", "write", &InvokeCommand<&PsuManager::Cmd_Write> },
     };
 };

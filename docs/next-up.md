@@ -9,52 +9,45 @@ Last updated 2026-09-09.
 
 ## Now
 
-**The XY6020L runs on hardware.** Flashed to the C3 at `E8:3D:C1:9C:1C:CC` (COM5) on
-2026-09-09 and driven over its own WebSocket. What the unit confirmed:
+**The XY6020L runs on hardware, on the capability model, updated over the air.** Flashed to the
+C3 at `E8:3D:C1:9C:1C:CC`, then twice updated by OTA with no cable attached. What the unit
+confirmed, in `psu get`:
 
-- `XY6020L: online (addr=1)` 2.6 s after boot; 30 s of steady polling with **zero** Modbus
-  warnings. TX 3 / RX 4 at 115200 is right, so the wiring reading was right too.
-- Scales confirmed by plausibility: input 18.75 V, temperature **22.5 °C** (room), setpoints
-  4.00 V / 10.00 A off the front panel. All 0.01 except temperature's 0.1.
-- `psu set` writes, echoes and refuses correctly against the DRIVER's own limits:
-  `"Set Voltage out of range (0-60 V)"` at 61 V, and `"this supply has no 'backlight'"` — from
-  the same handler that accepts backlight on a DPS5020.
-- Protection reads `None` with its label; all twenty readings arrive in `psu get`.
+- `runtimeSeconds` 4731 (01:18:51) folded from three registers; those three appear nowhere.
+- `externalTemperature` reports **unavailable** — the 8888 sentinel fired, and 888.8 °C is gone.
+- `chargeAh` 0.67 Ah and `energyWh` 2.23 Wh, so the 32-bit low-word-first decode is right.
+- `activePreset` = `M0` with ten options; `protectionState` = `None` with eleven.
+- **The protection block answers.** LVP 6.0 V, OVP 62.0 V, OCP 22.0 A, OTP 95 °C — and OTP
+  matching the vendor's documented default is what confirms that block's per-unit scales.
+- `psu write` writes, and refuses a read-only capability, an out-of-range value (against the
+  capability's own max) and an unknown key.
 
-**Three things the bench has NOT settled, and two need a load on the output.**
+**Two scale questions left, one of them still needing a load.**
 
-1. **The 0.1 W power scale.** Output was off, so power read 0.00 W and the range argument in
-   `reasoning/2026-09-09-18h52` is still only an argument. Put a load on and compare against the
-   panel: 10× low means the scale is 0.01 W.
-2. **The 32-bit word order** on charge and energy. Both accumulators read 0.000, which is what
-   either word order gives for zero. They must be nonzero to mean anything.
-3. **`model` reads 25858** (0x6502), which is not obviously a product number, and `version`
-   reads 140. Register 0x0016/0x0017 answer *something* every poll; whether that something is
-   the model is unconfirmed, and it is display-only either way.
+1. **The live power scale (0x0004).** Output was on at 4 V into nothing, so power read 0.00 W.
+   The 0.1 W choice is still only the range argument in `reasoning/2026-09-09-18h52`. Put a load
+   on and compare with the panel: 10× low means 0.01 W.
+2. **OPP is now 1 W per count, inferred not measured.** At 0.1 W this unit read an odd 120 W; at
+   1 W it reads 1200 W, exactly its rating, and the vendor's documented 950 W default would be an
+   implausible 95 W at 0.1. The neighbouring OTP confirms the block uses natural units where the
+   live block uses hundredths. One look at the panel's OPP setting settles it.
 
-**One transient worth knowing, not yet a bug.** At 23 s of the first boot, one poll logged
-`TX echo detected: 7 bytes in RX after send` and then timed out reading `0x001D`. Seven bytes is
-exactly one single-register reply, so that is a LATE answer found in the buffer by the next
-send — the supply being slow once, the same shape as `reasoning/2026-08-11-22h33`. It has not
-recurred in 30 s of steady state and the device never went offline. If it becomes frequent,
-drop `memoryGroup` from the table: it is the only reading past the main block and it costs the
-poll its third transaction.
+**`protOverCurrent` came back holding 22.0 A on a 20 A supply**, so the declared max is 25 A —
+the rating is not the register's ceiling, and refusing to re-enter a value the panel already
+accepted would repeat the `MAX_CURRENT` mistake. Same open question as the DPS's 20.1 A.
 
-**`dps50xx_c3` has the console fix and has not been flashed with it.** Same overlay change, and
-`reasoning/2026-09-09-19h34` predicts that bench's own WiFi history was partly this. The ESP32
-board was never affected — it has a real UART bridge, so its console was always UART-primary.
+**`model` still reads 25858 and `version` 140.** Both answer every poll; neither is known to
+mean what it is named. They are in the `info` group, so nothing displays them.
 
-**An EXISTING sdkconfig keeps the old console setting, so the guard fires until it is
-regenerated.** `sdkconfig.defaults` only seeds a *fresh* config, so the first build after this
-change fails with the `#error` rather than silently keeping USB primary — which is the guard
-working, but the message tells you to change a Kconfig option and not what actually needs doing.
-Delete the stale `sdkconfig` (it is gitignored), or build per board the way CLAUDE.md documents:
-`-DSDKCONFIG=sdkconfig-c3`. The root `sdkconfig` in this tree is still a stale esp32c3 one and
-will fail this way.
+**The M0 caveat.** The protections are read from memory group M0's block (0x0052–0x005D). The
+addresses are per-group, so this is correct only while the panel is on M0 — which is what
+`activePreset` reports today. Reading the active group's block would mean addressing the poll off
+another capability's value, which nothing supports.
 
-**`ConsoleManager.cpp` now holds upstream's guard but not upstream's later log-flood fix**
-(Strux `7449f81`), because only the connectivity fix was wanted. A full `cp -r ../Strux/main/strux`
-supersedes both, and that is the intended way out — this is not fork debt.
+**Preset recall and the composite limits are read-only on purpose.** Recalling a preset rewrites
+every setpoint at once, and max charge / max energy / max runtime are 32-bit or split-register
+values that would need a multi-register write `ModbusPsu` does not do. The UI shows them and does
+not pretend to set them.
 
 **Four fixes want pushing back to Strux.**
 

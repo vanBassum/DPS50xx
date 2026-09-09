@@ -60,8 +60,26 @@ Frontend (React 19 + TypeScript + Vite + Tailwind + shadcn/ui, package manager i
 cd frontend
 pnpm dev          # hot-reload dev server, proxies WebSocket to a running device
 pnpm build        # tsc -b && vite build && gzip into ../www (embedded in flash as FAT image)
-pnpm typecheck    # tsc --noEmit
+pnpm typecheck    # tsc -b --noEmit (plain --noEmit checks NOTHING: root tsconfig has files: [])
 ```
+
+**Updating a device over the wire** (no serial cable needed) is **clear → write → activate →
+reboot**, and the clear is not optional: `partition write` is a RAW write, and flash cannot be
+written without erasing, so writing over an existing image ANDs the new bits into the old ones.
+An app slot then fails `activate` with `invalid segment length`; a `www` image fails *silently* —
+it mounts, serves, and returns garbage. See `docs/reasoning/2026-09-09-20h20`.
+
+```
+partition list                      # find the idle app slot (uploadable, not running)
+partition clear   {partition}       # a few seconds for 1.5 MB, silent until done
+partition write   {partition}       # stream the body in the same session, FLAG_FINAL last
+partition activate {partition}      # app slots only: validates the image, refuses a bad one
+system reboot
+```
+
+The frontend lives in its own `www` FAT partition and takes the same four steps (activate is a
+no-op for data). After a `www` write, read an asset back and compare it against the build output —
+nothing validates a filesystem image the way `esp_image` validates an app.
 
 There are no automated tests; verification is building, flashing, and driving the device over its own wire:
 

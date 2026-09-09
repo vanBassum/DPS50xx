@@ -491,6 +491,14 @@ class BackendService {
     return this.send<PsuSetResult>("psu set", changes)
   }
 
+  /** Write ONE capability by name, validated on the device against that
+   *  capability's own range. This is how the long tail — protection thresholds
+   *  and whatever the next supply adds — is configured without this file
+   *  growing a method per register. */
+  async writePsu(key: string, value: number): Promise<PsuWriteResult> {
+    return this.send<PsuWriteResult>("psu write", { key, value })
+  }
+
   /** Returns false on wrong password; throws on connection failure. On success
    *  stores the session key and marks the connection authenticated. */
   async login(password: string): Promise<boolean> {
@@ -713,64 +721,92 @@ export interface PartitionsResponse {
 
 // ── The supply ───────────────────────────────────────────────
 
-/** One reading off the supply's register chain.
+/** One capability of the supply: something it can do or report, already
+ *  normalized by its driver.
  *
- *  The DEVICE describes it — label, unit, kind and writable range all arrive on
- *  the wire — so this build of the UI renders a supply it has never heard of,
- *  and a driver that registers a new register needs no change here. That is why
- *  there is no PROTECTION_LABELS table any more: the supply that defines the
- *  codes is the thing that names them, in `valueLabel`. */
-export interface PsuReading {
+ *  This is NOT a device register. An XY6020L keeps its runtime in three
+ *  registers and reports an unconnected probe as 8888; neither of those facts
+ *  reaches this file, because the driver turns storage into meaning before
+ *  anything gets here. So there is no PROTECTION_LABELS table, no "888.8 means
+ *  no sensor", and no h/m/s arithmetic in React — only `kind`, `group`, `unit`
+ *  and a value.
+ *
+ *  A capability this build has never heard of still renders: that is the point
+ *  of the schema travelling with the value. */
+export interface PsuCapability {
   label: string
   unit: string
-  kind: "number" | "bool" | "enum"
-  /** Bools arrive as 0/1 and enums as the supply's own register code. */
+  /** How to read `value`: a measurement, a 0/1, a code with `options`, or a
+   *  whole number of SECONDS this side formats as HH:MM:SS. */
+  kind: "number" | "bool" | "enum" | "duration"
+  /** Which section of the UI it belongs to — the DRIVER decides, so this file
+   *  keeps no list of keys to sort them by. */
+  group: "core" | "session" | "protection" | "info"
   value: number
-  /** Enums only: the supply's name for the code currently in `value`. */
+  /** Absent means present. False is the supply saying it has no value right
+   *  now — an unplugged probe, or registers that did not answer. */
+  available?: boolean
+  /** Enums only: the supply's own name for the code in `value`. */
   valueLabel?: string
+  /** Enums only: every code's name, in order, so a selector can be drawn. */
+  options?: string[]
   access: "r" | "rw"
-  /** Writable readings only, in the same units as `value`. These are the
-   *  supply's own limits — the browser no longer hardcodes 50 V and 20 A. */
+  /** Writable capabilities only, in the same units as `value`. The supply's own
+   *  limits — the browser no longer hardcodes 50 V and 20 A. */
   min?: number
   max?: number
 }
 
 export interface PsuData {
   /** False when the supply missed enough consecutive polls to be declared gone
-   *  — the readings are then the last values that were successfully read. */
+   *  — the values are then the last ones successfully read. */
   online: boolean
-  /** Keyed by the reading's key, in the driver's declaration order. */
-  readings: Record<string, PsuReading>
+  /** Keyed by capability name, in the driver's declaration order. */
+  capabilities: Record<string, PsuCapability>
 }
 
-/** Well-known keys: the handful of readings this UI knows by meaning (it charts
- *  one, edits two, and toggles two). Everything else it only ever renders. */
+/** The capabilities this UI addresses BY MEANING: it charts three, edits two,
+ *  toggles two, and names one in a status line. Everything else it renders from
+ *  `group` without knowing what it is. These are semantic names — no supply's
+ *  register map appears here. */
 export const PSU_KEYS = {
   setVoltage: "setVoltage",
   setCurrent: "setCurrent",
-  outVoltage: "outVoltage",
-  outCurrent: "outCurrent",
-  outPower: "outPower",
-  inVoltage: "inVoltage",
-  outputOn: "outputOn",
+  outputVoltage: "outputVoltage",
+  outputCurrent: "outputCurrent",
+  outputPower: "outputPower",
+  inputVoltage: "inputVoltage",
+  outputEnabled: "outputEnabled",
   keyLock: "keyLock",
   constantCurrent: "constantCurrent",
-  backlight: "backlight",
-  protection: "protection",
-  model: "model",
-  version: "version",
+  protectionState: "protectionState",
+  activePreset: "activePreset",
 } as const
 
-export function psuReading(d: PsuData | null, key: string): PsuReading | undefined {
-  return d?.readings?.[key]
+export function psuCapability(d: PsuData | null, key: string): PsuCapability | undefined {
+  return d?.capabilities?.[key]
 }
 
 export function psuNumber(d: PsuData | null, key: string, fallback = 0): number {
-  return psuReading(d, key)?.value ?? fallback
+  return psuCapability(d, key)?.value ?? fallback
 }
 
 export function psuFlag(d: PsuData | null, key: string): boolean {
-  return (psuReading(d, key)?.value ?? 0) !== 0
+  return (psuCapability(d, key)?.value ?? 0) !== 0
+}
+
+/** Every capability in one group, in the order the driver declared them. This
+ *  is what replaced a hardcoded list of "extra" keys. */
+export function psuGroup(
+  d: PsuData | null,
+  group: PsuCapability["group"],
+): [string, PsuCapability][] {
+  return Object.entries(d?.capabilities ?? {}).filter(([, c]) => c.group === group)
+}
+
+/** True when the supply has a value for this right now. */
+export function psuAvailable(c: PsuCapability | undefined): boolean {
+  return c !== undefined && c.available !== false
 }
 
 /** Every field optional — the device leaves an omitted one alone.
@@ -787,8 +823,9 @@ export type PsuSetpoints = {
   backlight?: number
 }
 
-/** What the supply holds after the write. Every field is optional because the
- *  device echoes only the keys it actually has — a supply with no display to
+/** What the supply holds after the write, echoed under CAPABILITY keys so it
+ *  folds straight back into what `psu get` gave. Every field optional because
+ *  the device echoes only what it actually has — a supply with no display to
  *  light sends no `backlight`. */
 export interface PsuSetResult {
   ok: boolean
@@ -796,8 +833,16 @@ export interface PsuSetResult {
   error?: string
   setVoltage?: number
   setCurrent?: number
-  outputOn?: boolean
+  outputEnabled?: boolean
   keyLock?: boolean
   backlight?: number
+}
+
+/** Result of writing one capability by key. */
+export interface PsuWriteResult {
+  ok: boolean
+  error?: string
+  key?: string
+  value?: number
 }
 

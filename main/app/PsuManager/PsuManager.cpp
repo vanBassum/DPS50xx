@@ -63,9 +63,9 @@ void PsuManager::PollLoop()
             // it and wants the same five values every time — this is the one
             // consumer a generic walk would make worse.
             ESP_LOGD(TAG, "V=%.2fV I=%.2fA P=%.2fW Vin=%.2fV %s %s",
-                     psu.Number(PsuKey::OutVoltage), psu.Number(PsuKey::OutCurrent),
-                     psu.Number(PsuKey::OutPower), psu.Number(PsuKey::InVoltage),
-                     psu.Flag(PsuKey::OutputOn) ? "ON" : "OFF",
+                     psu.Number(PsuKey::OutputVoltage), psu.Number(PsuKey::OutputCurrent),
+                     psu.Number(PsuKey::OutputPower), psu.Number(PsuKey::InputVoltage),
+                     psu.Flag(PsuKey::OutputEnabled) ? "ON" : "OFF",
                      psu.Flag(PsuKey::ConstantCurrent) ? "CC" : "CV");
 
             if (telemetry_.Get())
@@ -87,14 +87,16 @@ void PsuManager::Record(Psu& psu)
     // off the chain under the telemetry name its driver gave it.
     point.Tag("mode", psu.Flag(PsuKey::ConstantCurrent) ? "cc" : "cv");
 
-    for (const PsuReading& r : psu)
+    for (const PsuCapability& c : psu)
     {
-        if (r.telemKey == nullptr)
+        // A capability with no telemetry name is not recorded, and one the
+        // supply currently has no value for is not invented.
+        if (c.telemKey == nullptr || !c.available)
             continue;
-        if (r.kind == PsuKind::Bool)
-            point.Field(r.telemKey, r.AsBool());
+        if (c.kind == PsuKind::Bool)
+            point.Field(c.telemKey, c.AsBool());
         else
-            point.Field(r.telemKey, static_cast<double>(r.value));
+            point.Field(c.telemKey, c.value);
     }
 
     point.Commit();
@@ -111,17 +113,33 @@ void PsuManager::ShowLinkState(bool online)
 // CommandContext.
 // ──────────────────────────────────────────────────────────────
 
-/// The wire name for a reading's kind. A converter, so it lives here at the
+/// The wire name for a capability's kind. A converter, so it lives here at the
 /// edge rather than on the role — same split as SettingsManager keeping its
 /// JSON out of Setting.
 static const char* KindName(PsuKind kind)
 {
     switch (kind)
     {
-    case PsuKind::Bool: return "bool";
-    case PsuKind::Enum: return "enum";
+    case PsuKind::Bool:     return "bool";
+    case PsuKind::Enum:     return "enum";
+    case PsuKind::Duration: return "duration";
     case PsuKind::Number:
-    default:            return "number";
+    default:                return "number";
+    }
+}
+
+/// Which section of a UI a capability belongs to. The DRIVER decides this — see
+/// PsuGroup — so a dashboard needs no list of keys to know that a preset is not
+/// a measurement and a trip threshold is not a live value.
+static const char* GroupName(PsuGroup group)
+{
+    switch (group)
+    {
+    case PsuGroup::Session:    return "session";
+    case PsuGroup::Protection: return "protection";
+    case PsuGroup::Info:       return "info";
+    case PsuGroup::Core:
+    default:                   return "core";
     }
 }
 
@@ -131,33 +149,56 @@ RequestError PsuManager::Cmd_Get(CommandContext& ctx)
 
     Psu& psu = app_.getBoard().GetPsu();
 
-    // The reply DESCRIBES itself: every reading carries its own label, unit,
-    // kind and writable range, so the browser renders a supply it was never
-    // told about and this handler names not one register.
+    // The reply DESCRIBES itself: every capability carries its own label, unit,
+    // kind, group and writable range, so the browser renders a supply it was
+    // never told about — and this handler names neither a register nor a
+    // supply. What arrives here is already semantic; see interfaces/Psu.h.
     auto resp = ctx.reply.object();
     resp.field("online", psu.IsOnline());
 
-    auto readings = resp.object("readings");
-    for (const PsuReading& r : psu)
+    auto capabilities = resp.object("capabilities");
+    for (const PsuCapability& c : psu)
     {
-        auto entry = readings.object(r.key);
-        entry.field("label", r.label);
-        entry.field("unit", r.unit);
-        entry.field("kind", KindName(r.kind));
-        entry.field("value", r.value);
-        entry.field("access", r.Writable() ? "rw" : "r");
+        auto entry = capabilities.object(c.key);
+        entry.field("label", c.label);
+        entry.field("unit", c.unit);
+        entry.field("kind", KindName(c.kind));
+        entry.field("group", GroupName(c.group));
+        entry.field("access", c.Writable() ? "rw" : "r");
+
+        // A Duration is a whole number of seconds, so it goes on the wire as an
+        // integer rather than as a float that would print 2720.00. uint32 is
+        // 136 years of seconds; a 64-bit path through lib/protocol would be
+        // fork debt for a range no bench supply reaches.
+        if (c.kind == PsuKind::Duration)
+            entry.field("value", static_cast<uint32_t>(c.value));
+        else
+            entry.field("value", static_cast<float>(c.value));
+
+        // "The supply has no measurement for this right now" — an absent probe
+        // answering its sentinel, or an optional block that did not reply. A UI
+        // shows "—" instead of presenting either as a reading.
+        if (!c.available)
+            entry.field("available", false);
 
         // An enum's codes are named by the supply that defines them, which is
-        // what let PROTECTION_LABELS die in the frontend.
-        if (const char* label = r.ValueLabel())
+        // what let PROTECTION_LABELS die in the frontend. The whole TABLE goes
+        // with it, so a selector can be drawn without knowing that 0 is M0.
+        if (const char* label = c.ValueLabel())
             entry.field("valueLabel", label);
-
-        // The bounds the browser draws its inputs from, and the same ones
-        // `psu set` refuses against below.
-        if (r.Writable())
+        if (c.kind == PsuKind::Enum && c.enumLabels != nullptr)
         {
-            entry.field("min", r.min);
-            entry.field("max", r.max);
+            auto options = entry.array("options");
+            for (uint8_t i = 0; i < c.enumCount; ++i)
+                options.value(c.enumLabels[i]);
+        }
+
+        // The bounds the browser draws its inputs from, and the same ones the
+        // handlers below refuse against.
+        if (c.Writable())
+        {
+            entry.field("min", c.min);
+            entry.field("max", c.max);
         }
     }
     return RequestError::Ok;
@@ -174,7 +215,7 @@ RequestError PsuManager::Cmd_Set(CommandContext& ctx)
     // replaces the old field/value string pair, which could only ever carry one.
     float    voltage   = psu.Number(PsuKey::SetVoltage);
     float    current   = psu.Number(PsuKey::SetCurrent);
-    bool     output    = psu.Flag(PsuKey::OutputOn);
+    bool     output    = psu.Flag(PsuKey::OutputEnabled);
     bool     keyLock   = psu.Flag(PsuKey::KeyLock);
     uint32_t backlight = static_cast<uint32_t>(psu.Number(PsuKey::Backlight));
 
@@ -214,23 +255,23 @@ RequestError PsuManager::Cmd_Set(CommandContext& ctx)
     const bool setV = voltage   != psu.Number(PsuKey::SetVoltage);
     const bool setI = current   != psu.Number(PsuKey::SetCurrent);
     const bool setB = backlight != static_cast<uint32_t>(psu.Number(PsuKey::Backlight));
-    const bool setO = output    != psu.Flag(PsuKey::OutputOn);
+    const bool setO = output    != psu.Flag(PsuKey::OutputEnabled);
     const bool setL = keyLock   != psu.Flag(PsuKey::KeyLock);
 
     char why[96] = {};
     auto valid = [&](const char* key, float value, bool changed) {
         if (!changed)
             return true;
-        const PsuReading* r = psu.Find(key);
-        if (r == nullptr)
+        const PsuCapability* c = psu.Find(key);
+        if (c == nullptr)
         {
             snprintf(why, sizeof(why), "this supply has no '%s'", key);
             return false;
         }
-        if (!r->InRange(value))
+        if (!c->InRange(value))
         {
             snprintf(why, sizeof(why), "%s out of range (%g-%g%s%s)",
-                     r->label, r->min, r->max, r->unit[0] ? " " : "", r->unit);
+                     c->label, c->min, c->max, c->unit[0] ? " " : "", c->unit);
             return false;
         }
         return true;
@@ -239,7 +280,7 @@ RequestError PsuManager::Cmd_Set(CommandContext& ctx)
     if (!valid(PsuKey::SetVoltage, voltage, setV)) return refuse(why);
     if (!valid(PsuKey::SetCurrent, current, setI)) return refuse(why);
     if (!valid(PsuKey::Backlight, static_cast<float>(backlight), setB)) return refuse(why);
-    if (!valid(PsuKey::OutputOn, output ? 1.0f : 0.0f, setO)) return refuse(why);
+    if (!valid(PsuKey::OutputEnabled, output ? 1.0f : 0.0f, setO)) return refuse(why);
     if (!valid(PsuKey::KeyLock, keyLock ? 1.0f : 0.0f, setL)) return refuse(why);
 
     // Apply in an order that cannot brown-out a load: the limits move before the
@@ -250,7 +291,7 @@ RequestError PsuManager::Cmd_Set(CommandContext& ctx)
     const bool turningOff = setO && !output;
 
     if (err == ModbusError::NoError && turningOff)
-        err = psu.Write(PsuKey::OutputOn, 0.0f);
+        err = psu.Write(PsuKey::OutputEnabled, 0.0f);
 
     if (err == ModbusError::NoError && setV)
         err = psu.Write(PsuKey::SetVoltage, voltage);
@@ -258,7 +299,7 @@ RequestError PsuManager::Cmd_Set(CommandContext& ctx)
         err = psu.Write(PsuKey::SetCurrent, current);
 
     if (err == ModbusError::NoError && setO && !turningOff)
-        err = psu.Write(PsuKey::OutputOn, 1.0f);
+        err = psu.Write(PsuKey::OutputEnabled, 1.0f);
 
     if (err == ModbusError::NoError && setB)
         err = psu.Write(PsuKey::Backlight, static_cast<float>(backlight));
@@ -275,11 +316,61 @@ RequestError PsuManager::Cmd_Set(CommandContext& ctx)
     // Echo what the supply now holds, so a caller needs no follow-up `psu get`.
     // Only the keys this supply actually has — the same reply on a supply
     // without a backlight simply has no `backlight` field.
-    if (psu.Has(PsuKey::SetVoltage)) resp.field("setVoltage", psu.Number(PsuKey::SetVoltage));
-    if (psu.Has(PsuKey::SetCurrent)) resp.field("setCurrent", psu.Number(PsuKey::SetCurrent));
-    if (psu.Has(PsuKey::OutputOn))   resp.field("outputOn", psu.Flag(PsuKey::OutputOn));
-    if (psu.Has(PsuKey::KeyLock))    resp.field("keyLock", psu.Flag(PsuKey::KeyLock));
+    // Echoed under the CAPABILITY keys, so a caller folds the reply straight
+    // back into what `psu get` gave it.
+    if (psu.Has(PsuKey::SetVoltage))    resp.field("setVoltage", psu.Number(PsuKey::SetVoltage));
+    if (psu.Has(PsuKey::SetCurrent))    resp.field("setCurrent", psu.Number(PsuKey::SetCurrent));
+    if (psu.Has(PsuKey::OutputEnabled)) resp.field("outputEnabled", psu.Flag(PsuKey::OutputEnabled));
+    if (psu.Has(PsuKey::KeyLock))       resp.field("keyLock", psu.Flag(PsuKey::KeyLock));
     if (psu.Has(PsuKey::Backlight))
         resp.field("backlight", static_cast<int32_t>(psu.Number(PsuKey::Backlight)));
+    return RequestError::Ok;
+}
+
+RequestError PsuManager::Cmd_Write(CommandContext& ctx)
+{
+    char key[32] = {};
+    float value = 0.0f;
+    RETURN_IF_ERROR(ctx.readArgs(
+        Required("key", key),
+        Required("value", value)
+    ));
+
+    Psu& psu = app_.getBoard().GetPsu();
+
+    auto refuse = [&ctx](const char* why) {
+        auto resp = ctx.reply.object();
+        resp.field("ok", false);
+        resp.field("error", why);
+        return RequestError::Ok;
+    };
+
+    // Everything this handler knows about what it is writing comes off the
+    // CAPABILITY: whether the supply has it, whether it can be written, and
+    // what range it accepts. Which register that becomes — or whether it is one
+    // register, or two, or none — never reaches here. So the same code
+    // configures an XY6020L over-voltage trip and whatever the next supply has.
+    PsuCapability* c = psu.Find(key);
+    if (c == nullptr)
+        return refuse("this supply has no such capability");
+    if (!c->Writable())
+        return refuse("capability is read-only");
+
+    char why[96];
+    if (!c->InRange(value))
+    {
+        snprintf(why, sizeof(why), "%s out of range (%g-%g%s%s)",
+                 c->label, c->min, c->max, c->unit[0] ? " " : "", c->unit);
+        return refuse(why);
+    }
+
+    const ModbusError err = psu.Write(*c, value);
+
+    auto resp = ctx.reply.object();
+    resp.field("ok", err == ModbusError::NoError);
+    if (err != ModbusError::NoError)
+        resp.field("error", ModbusErrorToString(err));
+    resp.field("key", c->key);
+    resp.field("value", static_cast<float>(c->value));
     return RequestError::Ok;
 }
