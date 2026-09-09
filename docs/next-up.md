@@ -5,9 +5,21 @@ lands or is dropped — never ticked off in place. Everything else lives in
 `docs/backlog/` (work for later) or `docs/reasoning/` (why things are the way they are).
 If a fact wants to survive, it does not belong in this file.
 
-Last updated 2026-08-11.
+Last updated 2026-09-09.
 
 ## Now
+
+**The register chain is built for both boards and flashed to neither.** A driver now declares
+self-describing readings and `psu get`, the telemetry point, setpoint validation and the
+dashboard all walk them — see `reasoning/2026-09-09-18h32`. esp32 builds at 26% free, C3 at 21%.
+Nothing has touched a supply yet, and three things are worth watching on the first flash:
+the poll must still cost exactly ONE Modbus transaction for the DPS's contiguous map, the
+telemetry field names must be unchanged (`voltage`, `inputVoltage`, … — a rename silently
+orphans the Influx history), and `psu set` refuses against the reading's own min/max now.
+
+**`psu get`'s reply shape changed, so anything scripted against it breaks.** Flat fields became
+`readings: { <key>: { label, unit, kind, value, valueLabel?, access, min?, max? } }`. `psu set`
+takes the same arguments as before and echoes only the keys the supply actually has.
 
 **Four fixes want pushing back to Strux.**
 

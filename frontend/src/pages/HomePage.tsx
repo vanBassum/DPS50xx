@@ -1,6 +1,13 @@
 import { useState } from "react"
 import { usePsu, type HistoryPoint } from "@/hooks/use-psu"
-import { PROTECTION_LABELS } from "@/lib/backend"
+import {
+  psuFlag,
+  psuNumber,
+  psuReading,
+  PSU_KEYS,
+  type PsuData,
+  type PsuReading,
+} from "@/lib/backend"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { PowerIcon, ZapIcon, LockIcon, UnlockIcon } from "lucide-react"
@@ -47,7 +54,7 @@ export default function HomePage() {
 
       {data && !data.online && (
         <div className="rounded-xl border border-amber-500/20 bg-card p-8 text-center text-sm text-amber-500">
-          DPS50xx not responding on Modbus. Check wiring and power.
+          Supply not responding on Modbus. Check wiring and power.
         </div>
       )}
 
@@ -63,77 +70,67 @@ export default function HomePage() {
           <div className="space-y-4">
             {/* Live readouts */}
             <div className="grid grid-cols-3 gap-3">
-              <ReadoutCard label="Voltage" value={data.outVoltage} unit="V" color="text-yellow-500" />
-              <ReadoutCard label="Current" value={data.outCurrent} unit="A" color="text-cyan-500" />
-              <ReadoutCard label="Power" value={data.outPower} unit="W" color="text-orange-500" />
+              <ReadoutCard label="Voltage" value={psuNumber(data, PSU_KEYS.outVoltage)} unit="V" color="text-yellow-500" />
+              <ReadoutCard label="Current" value={psuNumber(data, PSU_KEYS.outCurrent)} unit="A" color="text-cyan-500" />
+              <ReadoutCard label="Power" value={psuNumber(data, PSU_KEYS.outPower)} unit="W" color="text-orange-500" />
             </div>
 
             {/* Status bar */}
             <div className="flex items-center justify-between rounded-lg border bg-card px-4 py-2.5 text-sm">
-              <StatusItem label="Input" value={`${data.inVoltage.toFixed(1)}V`} />
+              <StatusItem label="Input" value={`${psuNumber(data, PSU_KEYS.inVoltage).toFixed(1)}V`} />
               <Divider />
               <StatusItem
                 label="Mode"
-                value={data.constantCurrent ? "CC" : "CV"}
-                highlight={data.constantCurrent}
+                value={psuFlag(data, PSU_KEYS.constantCurrent) ? "CC" : "CV"}
+                highlight={psuFlag(data, PSU_KEYS.constantCurrent)}
               />
               <Divider />
+              {/* The supply names its own protection codes, so there is no
+                  label table on this side to fall out of date. */}
               <StatusItem
                 label="Protection"
-                value={PROTECTION_LABELS[data.protection] ?? "?"}
-                highlight={data.protection !== 0}
+                value={psuReading(data, PSU_KEYS.protection)?.valueLabel ?? "?"}
+                highlight={psuNumber(data, PSU_KEYS.protection) !== 0}
               />
             </div>
 
             {/* Controls */}
             <div className="rounded-xl border bg-card p-6 text-card-foreground shadow-sm space-y-5">
-              <SetpointRow
-                label="Set Voltage"
-                unit="V"
-                current={data.setVoltage}
-                min={0}
-                max={50}
-                step={0.01}
-                onSet={setVoltage}
-              />
-              <SetpointRow
-                label="Set Current"
-                unit="A"
-                current={data.setCurrent}
-                min={0}
-                max={20}
-                step={0.01}
-                onSet={setCurrent}
-              />
+              <SetpointRow reading={psuReading(data, PSU_KEYS.setVoltage)} onSet={setVoltage} />
+              <SetpointRow reading={psuReading(data, PSU_KEYS.setCurrent)} onSet={setCurrent} />
 
               <div className="flex items-center gap-3 pt-2">
                 <Button
                   className={`flex-1 h-12 text-base font-bold ${
-                    data.outputOn
+                    psuFlag(data, PSU_KEYS.outputOn)
                       ? "bg-emerald-600 hover:bg-emerald-700 text-white"
                       : "bg-red-600 hover:bg-red-700 text-white"
                   }`}
-                  onClick={() => setOutput(!data.outputOn)}
+                  onClick={() => setOutput(!psuFlag(data, PSU_KEYS.outputOn))}
                 >
                   <PowerIcon className="mr-2 size-5" />
-                  {data.outputOn ? "OUTPUT ON" : "OUTPUT OFF"}
+                  {psuFlag(data, PSU_KEYS.outputOn) ? "OUTPUT ON" : "OUTPUT OFF"}
                 </Button>
 
-                <Button
-                  variant="outline"
-                  size="icon"
-                  className="h-12 w-12 shrink-0"
-                  onClick={() => setKeyLock(!data.keyLock)}
-                  title={data.keyLock ? "Unlock keys" : "Lock keys"}
-                >
-                  {data.keyLock ? (
-                    <LockIcon className="size-5 text-amber-500" />
-                  ) : (
-                    <UnlockIcon className="size-5" />
-                  )}
-                </Button>
+                {psuReading(data, PSU_KEYS.keyLock) && (
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="h-12 w-12 shrink-0"
+                    onClick={() => setKeyLock(!psuFlag(data, PSU_KEYS.keyLock))}
+                    title={psuFlag(data, PSU_KEYS.keyLock) ? "Unlock keys" : "Lock keys"}
+                  >
+                    {psuFlag(data, PSU_KEYS.keyLock) ? (
+                      <LockIcon className="size-5 text-amber-500" />
+                    ) : (
+                      <UnlockIcon className="size-5" />
+                    )}
+                  </Button>
+                )}
               </div>
             </div>
+
+            <ExtraReadings data={data} />
           </div>
 
           {/* Right column: charts */}
@@ -141,8 +138,8 @@ export default function HomePage() {
             <div className="space-y-4">
               <VoltageCurrentChart
                 history={history}
-                setVoltage={data.setVoltage}
-                setCurrent={data.setCurrent}
+                setVoltage={psuNumber(data, PSU_KEYS.setVoltage)}
+                setCurrent={psuNumber(data, PSU_KEYS.setCurrent)}
               />
               <PowerChart history={history} />
             </div>
@@ -307,25 +304,60 @@ function ReadoutCard({
   )
 }
 
+// ── Everything the page has no opinion about ─────────────────
+//
+// The keys in PSU_KEYS are the ones above: charted, edited, toggled. Any OTHER
+// reading the supply registered lands here, described by the device — so an
+// XY6020L's energy counters and input temperature appear without this file
+// changing. For a DPS5020, whose whole map is well known, this renders nothing.
+const KNOWN = new Set<string>(Object.values(PSU_KEYS))
+
+function ExtraReadings({ data }: { data: PsuData }) {
+  const extras = Object.entries(data.readings).filter(([key]) => !KNOWN.has(key))
+  if (extras.length === 0) return null
+
+  return (
+    <div className="rounded-xl border bg-card p-4 text-card-foreground shadow-sm">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+        {extras.map(([key, r]) => (
+          <div key={key}>
+            <div className="text-xs text-muted-foreground">{r.label}</div>
+            <div className="font-mono text-sm font-medium tabular-nums">
+              {formatReading(r)}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function formatReading(r: PsuReading): string {
+  if (r.kind === "bool") return r.value !== 0 ? "On" : "Off"
+  if (r.kind === "enum") return r.valueLabel ?? String(r.value)
+  return `${r.value.toFixed(2)}${r.unit ? ` ${r.unit}` : ""}`
+}
+
+// A setpoint row is driven entirely by its reading: label, unit, current value
+// and the supply's own bounds. A supply without the setpoint renders nothing
+// rather than an input that would be refused.
 function SetpointRow({
-  label,
-  unit,
-  current,
-  min,
-  max,
-  step,
+  reading,
   onSet,
 }: {
-  label: string
-  unit: string
-  current: number
-  min: number
-  max: number
-  step: number
+  reading?: PsuReading
   onSet: (v: number) => void
 }) {
   const [value, setValue] = useState("")
   const [editing, setEditing] = useState(false)
+
+  if (!reading) return null
+
+  const { label, unit } = reading
+  const current = reading.value
+  const min = reading.min ?? 0
+  const max = reading.max ?? Number.MAX_SAFE_INTEGER
+  const step = 0.01
 
   function handleSubmit() {
     const num = parseFloat(value)

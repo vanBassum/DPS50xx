@@ -5,19 +5,26 @@
 #include "CommandEntry.h"
 #include "TypedSettings.h"
 #include "Task.h"
-#include "DPS5020.h"
+#include "interfaces/Psu.h"
 
 // ──────────────────────────────────────────────────────────────
-// The application: a DPS50xx bench supply on the other end of a Modbus wire.
+// The application: a bench supply on the other end of a Modbus wire.
 //
 // This is the whole product, and it is an application manager like any other —
 // nothing in strux/ knows it exists. It announces itself by registering into
 // the framework from its own Init(), reaching:
 //
-//   • the board, for the supply and the LED  — app_.getBoard().GetDps()
+//   • the board, for the supply and the LED  — app_.getBoard().GetPsu()
 //   • the framework, for settings            — psu.poll / psu.telem
 //   • the framework, for commands            — `psu get` / `psu set`
 //   • the framework, for telemetry           — a point per successful poll
+//
+// It names no register and no supply. Every reading it reports, records or
+// validates comes off the Psu role's chain, which is why an XY6020L's energy
+// counters and input temperature will appear in `psu get`, in the telemetry and
+// in the dashboard without a line changing in this file. The handful of
+// readings the PRODUCT knows by meaning — the setpoints it writes, the values
+// it logs — go through the well-known keys in PsuKey.
 //
 // The polling lives in a Task rather than a Timer because a Modbus transaction
 // blocks for up to its timeout, and blocking in the FreeRTOS timer service task
@@ -33,18 +40,10 @@ class PsuManager
     /// moment after power-on before it answers on the bus at all.
     static constexpr int STARTUP_DELAY_MS = 2000;
 
-    /// Room for a DPS5020 poll, a telemetry Point (~350 bytes of buffers) and the
-    /// float formatting that Commit() does.
+    /// Room for a poll, a telemetry Point (~350 bytes of buffers) and the float
+    /// formatting that Commit() does.
     static constexpr int TASK_STACK = 5120;
     static constexpr int TASK_PRIORITY = 4;
-
-    // The hardware's full-scale range. Used to refuse a setpoint that the supply
-    // would silently clamp — a mistyped 500 V should come back as an error, not
-    // as 50 V. This is MEANING validation, which is the handler's job; the
-    // framework has already checked that the argument was a number at all.
-    static constexpr float MAX_VOLTAGE = 50.0f;
-    static constexpr float MAX_CURRENT = 20.0f;
-    static constexpr uint32_t MAX_BACKLIGHT = 5;
 
 public:
     explicit PsuManager(AppProvider& app);
@@ -64,8 +63,9 @@ private:
     void PollLoop();
 
     /// One telemetry point per successful poll, taken on the poll task where
-    /// there is stack for it.
-    void Record(const DPS5020Data& d);
+    /// there is stack for it. Fields are whatever the driver gave a telemetry
+    /// name; nothing here lists them.
+    void Record(Psu& psu);
 
     /// The status LED mirrors the Modbus link: lit means the supply answered the
     /// last poll. It is the only thing on this board that can say so without a

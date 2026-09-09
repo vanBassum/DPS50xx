@@ -1,81 +1,59 @@
 #pragma once
-#include "ModbusMaster.h"
-#include "ModbusError.h"
-#include <cstdint>
 
-// DPS5020 Modbus holding register map
-namespace DPS5020Reg
+#include "ModbusPsu.h"
+
+// ──────────────────────────────────────────────────────────────
+// DPS5020 bench supply: the register map, and nothing else.
+//
+// Everything that used to be here — the batch read, the retry loop, the offline
+// threshold, the decode, the setters — is in ModbusPsu now, and the application
+// reads this supply by walking the chain below rather than by naming its fields.
+// So a second supply is a second table, not a second copy of any of that.
+//
+// Register map (holding registers, 0.01 scaling on the analogue ones):
+//   0x0000 set voltage   R/W      0x0007 protection    R
+//   0x0001 set current   R/W      0x0008 CV/CC         R
+//   0x0002 out voltage   R        0x0009 output on     R/W
+//   0x0003 out current   R        0x000A backlight     R/W
+//   0x0004 out power     R        0x000B model         R
+//   0x0005 in voltage    R        0x000C version       R
+//   0x0006 key lock      R/W
+//
+// The map is contiguous, so ModbusPsu::Poll() coalesces the whole table into
+// one transaction — same single round trip the hand-written driver made.
+// ──────────────────────────────────────────────────────────────
+class DPS5020 : public ModbusPsu
 {
-    constexpr uint16_t SetVoltage   = 0x0000; // R/W  0.01V
-    constexpr uint16_t SetCurrent   = 0x0001; // R/W  0.01A
-    constexpr uint16_t OutVoltage   = 0x0002; // R    0.01V
-    constexpr uint16_t OutCurrent   = 0x0003; // R    0.01A
-    constexpr uint16_t OutPower     = 0x0004; // R    0.01W
-    constexpr uint16_t InVoltage    = 0x0005; // R    0.01V
-    constexpr uint16_t KeyLock      = 0x0006; // R/W  0=unlocked, 1=locked
-    constexpr uint16_t Protection   = 0x0007; // R    0=none, 1=OVP, 2=OCP, 3=OPP
-    constexpr uint16_t CvCc         = 0x0008; // R    0=CV, 1=CC
-    constexpr uint16_t OnOff        = 0x0009; // R/W  0=off, 1=on
-    constexpr uint16_t Backlight    = 0x000A; // R/W  0-5
-    constexpr uint16_t Model        = 0x000B; // R    e.g. 5020
-    constexpr uint16_t Version      = 0x000C; // R    firmware version
-
-    constexpr uint16_t RegStart     = 0x0000;
-    constexpr uint16_t RegCount     = 13;     // 0x0000..0x000C
-}
-
-enum class DPS5020Protection : uint8_t
-{
-    None = 0,
-    OVP  = 1, // Over Voltage Protection
-    OCP  = 2, // Over Current Protection
-    OPP  = 3, // Over Power Protection
-};
-
-struct DPS5020Data
-{
-    float setVoltage    = 0; // V
-    float setCurrent    = 0; // A
-    float outVoltage    = 0; // V
-    float outCurrent    = 0; // A
-    float outPower      = 0; // W
-    float inVoltage     = 0; // V
-    bool  keyLock       = false;
-    DPS5020Protection protection = DPS5020Protection::None;
-    bool  constantCurrent = false; // false=CV, true=CC
-    bool  outputOn      = false;
-    uint8_t backlight   = 0;
-    uint16_t model      = 0;
-    uint16_t version    = 0;
-};
-
-class DPS5020
-{
-    inline constexpr static const char* TAG = "DPS5020";
-    static constexpr int TIMEOUT_MS = 500;
-    static constexpr int MAX_RETRIES = 1;
-    static constexpr int OFFLINE_THRESHOLD = 3; // consecutive failures before going offline
-
 public:
-    explicit DPS5020(ModbusMaster &master, uint8_t address = 1);
-
-    // Read all registers in one batch
-    ModbusError Poll();
-
-    const DPS5020Data &GetData() const { return data_; }
-    bool IsOnline() const { return online_; }
-
-    // Control
-    ModbusError SetVoltage(float volts);
-    ModbusError SetCurrent(float amps);
-    ModbusError SetOutput(bool on);
-    ModbusError SetKeyLock(bool locked);
-    ModbusError SetBacklight(uint8_t level);
+    explicit DPS5020(ModbusMaster& master, uint8_t address = 1);
 
 private:
-    ModbusMaster &master_;
-    uint8_t address_;
-    DPS5020Data data_{};
-    bool online_ = false;
-    int failCount_ = 0;
+    /// Indexed by the protection register's own code. Naming the codes is the
+    /// supply's job — a supply with more states than this one needs no agreement
+    /// from the application or the frontend.
+    static constexpr const char* const kProtection[] = { "None", "OVP", "OCP", "OPP" };
+
+    // ── The table. Declaration order is register order is display order.
+    //
+    // Telemetry names are the third column and they are DELIBERATELY not the
+    // keys: `voltage` and `inputVoltage` are what the existing Influx series are
+    // called, and renaming one silently orphans its history. A reading with no
+    // telemetry name is simply not recorded.
+    //
+    // min/max on the setpoints are this supply's range. They are what the
+    // handler validates against and what the browser draws its input bounds
+    // from — MAX_VOLTAGE and `max={50}` are both gone.
+    WriteNumber setVoltage_ { "setVoltage", "Set Voltage",    "V", 0x0000, 0.01f, 0.0f, 50.0f, "setVoltage" };
+    WriteNumber setCurrent_ { "setCurrent", "Set Current",    "A", 0x0001, 0.01f, 0.0f, 20.0f, "setCurrent" };
+    ReadNumber  outVoltage_ { "outVoltage", "Output Voltage", "V", 0x0002, 0.01f, "voltage" };
+    ReadNumber  outCurrent_ { "outCurrent", "Output Current", "A", 0x0003, 0.01f, "current" };
+    ReadNumber  outPower_   { "outPower",   "Output Power",   "W", 0x0004, 0.01f, "power" };
+    ReadNumber  inVoltage_  { "inVoltage",  "Input Voltage",  "V", 0x0005, 0.01f, "inputVoltage" };
+    WriteBool   keyLock_    { "keyLock",    "Key Lock",            0x0006 };
+    ReadEnum    protection_ { "protection", "Protection",          0x0007, kProtection };
+    ReadBool    constantCurrent_ { "constantCurrent", "Constant Current", 0x0008 };
+    WriteBool   outputOn_   { "outputOn",   "Output",              0x0009, "output" };
+    WriteNumber backlight_  { "backlight",  "Backlight",      "",  0x000A, 1.0f, 0.0f, 5.0f };
+    ReadNumber  model_      { "model",      "Model",          "",  0x000B, 1.0f };
+    ReadNumber  version_    { "version",    "Firmware",       "",  0x000C, 1.0f };
 };

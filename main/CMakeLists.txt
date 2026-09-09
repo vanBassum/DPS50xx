@@ -44,8 +44,11 @@ set(STRUX_SOURCES
 # ── The application. This is the list a fork owns.
 set(APP_SOURCES
     "app/PsuManager/PsuManager.cpp"
-    # Board-independent chip drivers. DPS5020 speaks Modbus registers, not GPIO,
-    # so it is shared by every board that has a supply on the wire.
+    # Board-independent chip drivers. These speak Modbus registers, not GPIO,
+    # so they are shared by every board that has a supply on the wire.
+    # ModbusPsu is the Psu role over a Modbus wire (batching, retries, decode);
+    # DPS5020 is a register table on top of it, and a second supply is another.
+    "hardware/drivers/ModbusPsu.cpp"
     "hardware/drivers/DPS5020.cpp"
 )
 

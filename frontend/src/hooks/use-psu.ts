@@ -1,5 +1,12 @@
 import { useEffect, useState, useCallback, useRef } from "react"
-import { backend, type PsuData, type PsuSetpoints } from "@/lib/backend"
+import {
+  backend,
+  psuNumber,
+  PSU_KEYS,
+  type PsuData,
+  type PsuSetResult,
+  type PsuSetpoints,
+} from "@/lib/backend"
 import { useConnectionStatus } from "@/hooks/use-connection-status"
 
 export interface HistoryPoint {
@@ -13,6 +20,33 @@ export interface HistoryPoint {
  *  not persisted — the device's own telemetry (psu.telem) is what survives a
  *  reload, and it goes to InfluxDB through the relay. */
 const MAX_HISTORY = 300
+
+/** The keys `psu set` echoes back. Named here rather than derived, because the
+ *  echo is a promise about specific setpoints and not a schema. */
+const ECHOED = [
+  PSU_KEYS.setVoltage,
+  PSU_KEYS.setCurrent,
+  PSU_KEYS.outputOn,
+  PSU_KEYS.keyLock,
+  PSU_KEYS.backlight,
+] as const
+
+/** Fold the reply's echo into the readings, so a button feels immediate instead
+ *  of waiting for the next poll. A key the supply does not have is simply
+ *  absent from both sides. */
+function applyEcho(prev: PsuData, res: PsuSetResult): PsuData {
+  const readings = { ...prev.readings }
+  for (const key of ECHOED) {
+    const echoed = res[key]
+    const reading = readings[key]
+    if (echoed === undefined || reading === undefined) continue
+    readings[key] = {
+      ...reading,
+      value: typeof echoed === "boolean" ? (echoed ? 1 : 0) : echoed,
+    }
+  }
+  return { ...prev, readings }
+}
 
 export function usePsu(pollIntervalMs = 1000) {
   const connection = useConnectionStatus()
@@ -42,9 +76,9 @@ export function usePsu(pollIntervalMs = 1000) {
                 minute: "2-digit",
                 second: "2-digit",
               }),
-              voltage: d.outVoltage,
-              current: d.outCurrent,
-              power: d.outPower,
+              voltage: psuNumber(d, PSU_KEYS.outVoltage),
+              current: psuNumber(d, PSU_KEYS.outCurrent),
+              power: psuNumber(d, PSU_KEYS.outPower),
             },
           ]
           return next.length > MAX_HISTORY ? next.slice(-MAX_HISTORY) : next
@@ -75,18 +109,7 @@ export function usePsu(pollIntervalMs = 1000) {
     try {
       const res = await backend.setPsu(changes)
       setError(res.ok ? null : (res.error ?? "command failed"))
-      setData((prev) =>
-        prev
-          ? {
-              ...prev,
-              setVoltage: res.setVoltage,
-              setCurrent: res.setCurrent,
-              outputOn: res.outputOn,
-              keyLock: res.keyLock,
-              backlight: res.backlight,
-            }
-          : prev,
-      )
+      setData((prev) => (prev ? applyEcho(prev, res) : prev))
     } catch (e) {
       setError(e instanceof Error ? e.message : "command failed")
     }

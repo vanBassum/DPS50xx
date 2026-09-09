@@ -711,30 +711,66 @@ export interface PartitionsResponse {
   partitions: Partition[]
 }
 
-// ── DPS50xx ──────────────────────────────────────────────────────
+// ── The supply ───────────────────────────────────────────────
 
-/** Protection state, in the supply's own register encoding. */
-export const PROTECTION_LABELS = ["None", "OVP", "OCP", "OPP"] as const
+/** One reading off the supply's register chain.
+ *
+ *  The DEVICE describes it — label, unit, kind and writable range all arrive on
+ *  the wire — so this build of the UI renders a supply it has never heard of,
+ *  and a driver that registers a new register needs no change here. That is why
+ *  there is no PROTECTION_LABELS table any more: the supply that defines the
+ *  codes is the thing that names them, in `valueLabel`. */
+export interface PsuReading {
+  label: string
+  unit: string
+  kind: "number" | "bool" | "enum"
+  /** Bools arrive as 0/1 and enums as the supply's own register code. */
+  value: number
+  /** Enums only: the supply's name for the code currently in `value`. */
+  valueLabel?: string
+  access: "r" | "rw"
+  /** Writable readings only, in the same units as `value`. These are the
+   *  supply's own limits — the browser no longer hardcodes 50 V and 20 A. */
+  min?: number
+  max?: number
+}
 
 export interface PsuData {
   /** False when the supply missed enough consecutive polls to be declared gone
-   *  — the rest of the fields are then the last values that were read. */
+   *  — the readings are then the last values that were successfully read. */
   online: boolean
-  setVoltage: number
-  setCurrent: number
-  outVoltage: number
-  outCurrent: number
-  outPower: number
-  inVoltage: number
-  keyLock: boolean
-  /** Index into PROTECTION_LABELS: 0 none, 1 OVP, 2 OCP, 3 OPP. */
-  protection: number
-  /** True in constant-current mode, false in constant-voltage. */
-  constantCurrent: boolean
-  outputOn: boolean
-  backlight: number
-  model: number
-  version: number
+  /** Keyed by the reading's key, in the driver's declaration order. */
+  readings: Record<string, PsuReading>
+}
+
+/** Well-known keys: the handful of readings this UI knows by meaning (it charts
+ *  one, edits two, and toggles two). Everything else it only ever renders. */
+export const PSU_KEYS = {
+  setVoltage: "setVoltage",
+  setCurrent: "setCurrent",
+  outVoltage: "outVoltage",
+  outCurrent: "outCurrent",
+  outPower: "outPower",
+  inVoltage: "inVoltage",
+  outputOn: "outputOn",
+  keyLock: "keyLock",
+  constantCurrent: "constantCurrent",
+  backlight: "backlight",
+  protection: "protection",
+  model: "model",
+  version: "version",
+} as const
+
+export function psuReading(d: PsuData | null, key: string): PsuReading | undefined {
+  return d?.readings?.[key]
+}
+
+export function psuNumber(d: PsuData | null, key: string, fallback = 0): number {
+  return psuReading(d, key)?.value ?? fallback
+}
+
+export function psuFlag(d: PsuData | null, key: string): boolean {
+  return (psuReading(d, key)?.value ?? 0) !== 0
 }
 
 /** Every field optional — the device leaves an omitted one alone.
@@ -751,14 +787,17 @@ export type PsuSetpoints = {
   backlight?: number
 }
 
+/** What the supply holds after the write. Every field is optional because the
+ *  device echoes only the keys it actually has — a supply with no display to
+ *  light sends no `backlight`. */
 export interface PsuSetResult {
   ok: boolean
   /** Present only when ok is false: the Modbus error, or a rejected setpoint. */
   error?: string
-  setVoltage: number
-  setCurrent: number
-  outputOn: boolean
-  keyLock: boolean
-  backlight: number
+  setVoltage?: number
+  setCurrent?: number
+  outputOn?: boolean
+  keyLock?: boolean
+  backlight?: number
 }
 

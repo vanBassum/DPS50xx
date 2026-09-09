@@ -1,6 +1,7 @@
 #pragma once
 
 #include "interfaces/Led.h"
+#include "interfaces/Psu.h"
 
 // ──────────────────────────────────────────────────────────────
 // The board layer's provider: the ROLES every board owes, in application
@@ -33,4 +34,18 @@ public:
     virtual ~BoardProvider() = default;
 
     virtual Led& GetLed() = 0;
+
+    // The supply. This was deliberately NOT a role while there was one of them:
+    // a `Psu` interface would have been "DPS5020's whole API or a lossy subset
+    // of it", and every board would have owed a MockPsu for it.
+    //
+    // A second supply inverts that argument. What the two share is not one
+    // chip's API but a register CHAIN plus four verbs over it, and that is the
+    // application's own vocabulary rather than either supply's — see
+    // interfaces/Psu.h. MockPsu exists for a board with nothing on the wire, the
+    // same way MockLed does.
+    //
+    // BoardContext::GetDps() stays alongside it as the concrete escape hatch,
+    // for the day something needs a DPS5020's own API.
+    virtual Psu& GetPsu() = 0;
 };

@@ -24,14 +24,14 @@
 //     binding MockLed when the hardware is absent. It stays a role because
 //     "the status LED" is a thing application code addresses by meaning.
 //
-//   • GetDps() is a CONCRETE ACCESSOR, deliberately NOT on BoardProvider.
-//     A `Psu` role would have to be either DPS5020's whole API (thirteen
-//     registers, CV/CC, protection state) or a lossy subset of it, and it
-//     would oblige every future board — including ones with no supply
-//     attached — to bind a MockPsu. This is the escape hatch the layering
-//     documents for exactly this case, and it is checked at compile time:
-//     a board without a DPS simply has no GetDps(), and code calling it
-//     fails to build for that board rather than at runtime.
+//   • GetPsu() is also a ROLE now. It was not, while there was one supply:
+//     see BoardProvider.h for why a second one inverted that argument.
+//
+//   • GetDps() stays as a CONCRETE ACCESSOR, deliberately off BoardProvider —
+//     the escape hatch for the day something needs a DPS5020's own API rather
+//     than the role's. It is checked at compile time: a board without a DPS
+//     simply has no GetDps(), and code calling it fails to build for that
+//     board rather than at runtime. Nothing uses it today.
 // ──────────────────────────────────────────────────────────────
 
 class BoardContext : public BoardProvider
@@ -50,6 +50,7 @@ public:
 
     // ── Roles (BoardProvider) ──
     Led &GetLed() override { return led_; }
+    Psu &GetPsu() override { return dps_; }
 
     // ── Concrete driver accessors (off BoardProvider — see the note above) ──
     DPS5020 &GetDps() { return dps_; }
