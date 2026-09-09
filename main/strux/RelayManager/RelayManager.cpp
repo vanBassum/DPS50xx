@@ -18,6 +18,12 @@
 #include <cstdio>
 #include <cstdlib>
 
+namespace {
+
+inline uint32_t NowMs() { return pdTICKS_TO_MS(xTaskGetTickCount()); }
+
+} // namespace
+
 RelayManager::RelayManager(StruxProvider& strux)
     : strux_(strux)
 {
@@ -167,8 +173,10 @@ void RelayManager::BuildUri()
 
     // Registration rides the connect URL's query string rather than a protocol
     // message: the server knows who connected before the first chunk, and the
-    // session protocol gains no relay-specific verb. Firmware version travels with
-    // it so the server can key a file cache on it later.
+    // session protocol gains no relay-specific verb. Firmware version travels with it
+    // for the device list — NOT as a cache key: `www` is replaced independently of the
+    // app, so the version does not describe the frontend (2026-08-11-11h19), and the
+    // relay caches per connection instead, which needs nothing from here.
     //
     // Two identities go up here, and they are not the same thing. `id` is technical
     // and is what the token proves — it addresses the device in every URL. `name` and
@@ -194,7 +202,7 @@ void RelayManager::BuildUri()
 
 void RelayManager::TaskLoop()
 {
-    int idlePolls = 0;
+    uint32_t nextPingAt = 0;
 
     for (;;)
     {
@@ -204,8 +212,8 @@ void RelayManager::TaskLoop()
             // still associating, so without this every boot spends a connect attempt
             // it cannot win and logs three ERROR lines from the TLS and transport
             // layers on the way out. Same check covers WiFi dropping later, and the
-            // recovery AP windows that now sit between station rounds — during one of
-            // those the device has an address and no route, and every attempt it
+            // recovery AP windows that sit between station rounds in this fork — during
+            // one of those the device has an address and no route, and every attempt it
             // spends there is three ERROR lines nobody can act on.
             if (!strux_.getNetworkManager().HasUpstream())
             {
@@ -242,14 +250,18 @@ void RelayManager::TaskLoop()
             // Right after connect, because on a wss:// pipe the TLS handshake just
             // ran on this stack and is one of the two things it has to fit.
             CheckStackHeadroom();
-            idlePolls = 0;
+            nextPingAt = NowMs() + PING_INTERVAL_MS;
         }
 
-        // Between requests this is where the task sits. Mid-request the same read
-        // happens under the session, one layer down (RelaySessionLink) — same socket,
-        // same task, which is the property that removed the queue.
+        // Between requests this is where the task sits — blocked until a frame arrives
+        // or the next keepalive comes due, whichever happens first. Mid-request the
+        // same read happens under the session, one layer down (RelaySessionLink) —
+        // same socket, same task, which is the property that removed the queue.
+        int32_t untilPing = static_cast<int32_t>(nextPingAt - NowMs());
+        if (untilPing < 0) untilPing = 0;
+
         const int n = socket_.ReadFrame(sessionInbound_, sizeof(sessionInbound_),
-                                       IDLE_POLL_MS);
+                                        untilPing);
         if (n < 0)
         {
             OnDisconnected();
@@ -258,38 +270,53 @@ void RelayManager::TaskLoop()
 
         if (n == 0)
         {
-            // Silence. Make some traffic occasionally: a ping that will not go out is
-            // how an otherwise idle pipe finds out its TCP connection is gone.
-            if (++idlePolls >= PING_EVERY_IDLE_POLLS)
+            // The read ran its whole deadline out with nothing to show, which is what
+            // being idle looks like — so the ping is due. A ping that will not go out
+            // is how an otherwise idle pipe finds out its TCP connection is gone.
+            nextPingAt = NowMs() + PING_INTERVAL_MS;
+            if (!socket_.SendPing(PING_TIMEOUT_MS))
             {
-                idlePolls = 0;
-                if (!socket_.SendPing(PING_TIMEOUT_MS))
-                {
-                    ESP_LOGW(TAG, "keepalive ping failed");
-                    OnDisconnected();
-                }
+                ESP_LOGW(TAG, "keepalive ping failed");
+                OnDisconnected();
             }
             continue;
         }
 
-        idlePolls = 0;
         HandleFrame(sessionInbound_, static_cast<size_t>(n));
+
+        // After the request rather than before it: a session that took a while has
+        // just proven the pipe alive, and the next keepalive is owed from here.
+        nextPingAt = NowMs() + PING_INTERVAL_MS;
     }
 }
 
 void RelayManager::OnConnected()
 {
-    // A reconnect is a fresh pipe: drop the old auth state so a new remote user
-    // must authenticate again.
+    // A reconnect is a fresh pipe: drop the old session state.
     conn_.reset();
     conn_.fd = -1;   // "slot in use" — there is no socket fd on this transport
-    conn_.authed = !(auth_ && auth_->AuthRequired());
+
+    // Authentication belongs to the INTERFACE, and this one authenticates by
+    // existing: the device dialled OUT, over TLS, to a URL its owner configured,
+    // presenting a token it generated itself. That is proof of peer at the link
+    // layer — the same basis as a bonded Bluetooth transport, which AuthGate
+    // already describes as "a policy difference rather than a structural one" —
+    // so the pipe is authed the moment it is up and never sees `auth`.
+    //
+    // This line used to read `!(auth_ && auth_->AuthRequired())`, which is the
+    // WEB interface's policy. Setting web.password — a LAN concern — therefore
+    // locked the relay out of `web read`, leaving the asset proxy unable to fetch
+    // even the login page that would have unlocked it, and turning `ui modules`
+    // into a refusal indistinguishable from old firmware.
+    conn_.authed = true;
 
     skipping_ = false;
     linkUp_ = true;
 
-    ESP_LOGI(TAG, "Connected as '%s'%s", deviceId_,
-             conn_.authed ? " (no device password set — pipe is open)" : "");
+    // Says WHY the pipe is open, which is no longer "nobody set a password": this
+    // interface authenticates by its own dial-out, so web.password never gated it.
+    ESP_LOGI(TAG, "Connected as '%s' (relay interface — authenticated by dialling out)",
+             deviceId_);
 }
 
 int RelayManager::ReportConnectFailure(RelaySocket::ConnectResult result)

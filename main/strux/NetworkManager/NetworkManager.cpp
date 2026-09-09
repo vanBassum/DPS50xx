@@ -8,6 +8,7 @@
 #include "CommandManager.h"
 #include "nvs_flash.h"
 #include "esp_wifi.h"
+#include "esp_mac.h"
 #include "esp_log.h"
 #include "mdns.h"
 
@@ -47,6 +48,14 @@ void NetworkManager::Init()
     esp_log_level_set("phy_init", ESP_LOG_WARN);
     esp_log_level_set("esp_netif_handlers", ESP_LOG_WARN);
 
+    // Before the rest of this Init, not at the end of it with the command table:
+    // Setting::Get() aborts on a setting that was never registered, and from here on
+    // this function reads its own settings (mDNS below, the credentials in the first
+    // station round). Registering is what publishes them, so it has to come first.
+    strux_.getSettingsManager().Register({ &wifiSsid_, &wifiPassword_,
+                                           &wifiSsid2_, &wifiPassword2_,
+                                           &mdnsEnabled_ });
+
     wifi_interface_.SetEventHandler([this](const NetworkEvent& e) { HandleNetworkEvent(e); });
     wifi_interface_.Init();
 
@@ -55,19 +64,26 @@ void NetworkManager::Init()
     strux_.getSystemManager().GetDeviceName(deviceName, sizeof(deviceName));
     wifi_interface_.SetHostname(deviceName);
 
+    ComposeApSsid();
+
     // mDNS — <deviceName>.local
-    ESP_ERROR_CHECK(mdns_init());
-    mdns_hostname_set(deviceName);
-    mdns_instance_name_set(deviceName);
-    mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
+    if (mdnsEnabled_.Get())
+    {
+        ESP_ERROR_CHECK(mdns_init());
+        mdns_hostname_set(deviceName);
+        mdns_instance_name_set(deviceName);
+        mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
+    }
+    else
+    {
+        ESP_LOGI(TAG, "mDNS disabled — this device is reachable by address only");
+    }
 
     // One timer drives the whole cycle — see OnCycleTimer.
     connectTimer_.Init("net_cycle", pdMS_TO_TICKS(StaConnectTimeoutMs), false);
     connectTimer_.SetHandler([this]() { OnCycleTimer(); });
 
     strux_.getCommandManager().Register(this, commands_);
-    strux_.getSettingsManager().Register({ &wifiSsid_, &wifiPassword_,
-                                           &wifiSsid2_, &wifiPassword2_ });
 
     initAttempt.SetReady();
     ESP_LOGI(TAG, "Initialized");
@@ -87,6 +103,48 @@ const WiFiInterface& NetworkManager::wifi() const
 {
     WAIT_FOR_READY(initState);
     return wifi_interface_;
+}
+
+bool NetworkManager::GetIpv4(char* out, size_t len) const
+{
+    if (out == nullptr || len == 0)
+        return false;
+
+    out[0] = '\0';
+
+    const NetworkStatus status = wifi_interface_.getStatus();
+    if (!status.has_ipv4)
+        return false;
+
+    snprintf(out, len, IPSTR, IP2STR(&status.ipv4.ip));
+    return true;
+}
+
+void NetworkManager::ComposeApSsid()
+{
+    // The SoftAP MAC, not the station's: it is the address this AP actually beacons
+    // from, so it is the one a client sees beside the name it is being put in. The two
+    // differ by one on an ESP32 — close enough to confuse, far enough to be the wrong
+    // number in a bug report.
+    uint8_t mac[6] = {};
+    esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP);
+
+    char code[7];
+    snprintf(code, sizeof(code), "%02X%02X%02X", mac[3], mac[4], mac[5]);
+
+    char deviceName[33] = {};
+    strux_.getSystemManager().GetDeviceName(deviceName, sizeof(deviceName));
+
+    // 32 is esp_wifi's ssid[32], and a full 32 characters is legal there — no
+    // terminator to leave room for (see the strncpy note in WiFiInterface). What has
+    // to fit around the name is "-AP-" plus six hex digits, so the name gets what is
+    // left: a "%.*s" precision rather than a truncating write, because that bound is
+    // one the compiler can see (it rejects the manual version under
+    // -Werror=format-truncation, and it is right to).
+    const int nameRoom = 32 - static_cast<int>(strlen(ApSsidSuffix) + strlen(code));
+    snprintf(apSsid_, sizeof(apSsid_), "%.*s%s%s",
+             nameRoom, deviceName, ApSsidSuffix, code);
+    ESP_LOGI(TAG, "Own AP name: '%s'", apSsid_);
 }
 
 const char* NetworkManager::CurrentSsid() const
@@ -308,13 +366,13 @@ void NetworkManager::OpenApWindow()
     if (staCount_ > 1)
         ESP_LOGW(TAG, "none of %d configured networks reachable after %d attempts, "
                       "opening '%s' for %d min",
-                 staCount_, staRoundAttempts_.load(), DefaultApSsid,
+                 staCount_, staRoundAttempts_.load(), apSsid_,
                  ApWindowMs / 60000);
     else
         ESP_LOGW(TAG, "'%s' unreachable after %d attempts, opening '%s' for %d min",
-                 staNetworks_[0].ssid, staRoundAttempts_.load(), DefaultApSsid,
+                 staNetworks_[0].ssid, staRoundAttempts_.load(), apSsid_,
                  ApWindowMs / 60000);
-    wifi_interface_.StartAP(DefaultApSsid, DefaultApPassword);
+    wifi_interface_.StartAP(apSsid_, DefaultApPassword);
 
     connectTimer_.SetPeriod(pdMS_TO_TICKS(ApWindowMs));
     connectTimer_.Start();
@@ -334,8 +392,8 @@ void NetworkManager::StartProvisioningAp()
     if (!wifi_interface_.IsAP())
     {
         wifi_interface_.Stop();
-        ESP_LOGI(TAG, "No WiFi network configured, starting AP '%s'", DefaultApSsid);
-        wifi_interface_.StartAP(DefaultApSsid, DefaultApPassword);
+        ESP_LOGI(TAG, "No WiFi network configured, starting AP '%s'", apSsid_);
+        wifi_interface_.StartAP(apSsid_, DefaultApPassword);
     }
 
     connectTimer_.SetPeriod(pdMS_TO_TICKS(ProvisioningPollMs));
@@ -437,9 +495,27 @@ void NetworkManager::HandleNetworkEvent(const NetworkEvent& event)
         break;
 
     case NetworkEventType::Ipv4Lost:
+        // The address is gone; the association is not. esp_netif raises this when the
+        // lease goes away, and a station that actually left raises LinkDown as well —
+        // so this handler never has to guess which happened.
+        //
+        // Clearing staAssociated_ here is what made the next cycle tick read a joined
+        // station as an attempt that never associated. That branch answers with
+        // ReconnectSta, which esp_wifi refuses outright on a connected station
+        // ("sta is connected, disconnect before connecting to new ap"), and the
+        // refusals still counted as attempts — so a device whose radio was fine walked
+        // its round up towards the AP window. Exactly the failure the DHCP branch was
+        // written to prevent, re-opened from the one event that clears the flag it
+        // depends on.
+        //
+        // Associated without an address is precisely what staAssociated_ means, so say
+        // that and hand the timer back to the address wait. If DHCP really is gone the
+        // tick that follows restarts the station the proper way, radio and all.
         ESP_LOGW(TAG, "Lost IP");
         staConnected_ = false;
-        staAssociated_ = false;
+        staAssociated_ = true;
+        connectTimer_.SetPeriod(pdMS_TO_TICKS(StaDhcpTimeoutMs));
+        connectTimer_.Start();
         break;
     }
 }

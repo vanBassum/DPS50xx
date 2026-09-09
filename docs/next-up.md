@@ -49,34 +49,39 @@ every setpoint at once, and max charge / max energy / max runtime are 32-bit or 
 values that would need a multi-register write `ModbusPsu` does not do. The UI shows them and does
 not pretend to set them.
 
-**Five fixes want pushing back to Strux.**
+**Synced with Strux on 2026-09-09, and the debt list shrank because upstream took
+most of it.** `strux/` and `lib/` are now Strux `f7e0501` plus the deltas below;
+`docs/reasoning/2026-09-09-23h20` is why this was a merge rather than the copy CLAUDE.md
+describes.
 
-- `WiFiInterface` logs the disconnect reason by name, and `NetworkManager` alternates
-  station rounds with AP windows instead of ending in either — see
-  `reasoning/2026-08-10-19h19`. The reason-code line is the one to upstream first: it
-  costs nothing and it is what makes the retry policy decidable at all. The reason now
-  travels in `NetworkEvent` with the beacon RSSI, which is what lets a failed attempt be
-  retried in 2 s instead of waiting out a 10 s timeout for news that arrived at 1 s, and
-  what tells this manager's own teardown apart from a network refusing — see
-  `reasoning/2026-08-12-13h25`. Same commit, same upstream trip.
-- `NetworkManager::HasIpv4()` became `HasUpstream()`. The AP netif is always
-  192.168.4.1, so the relay's "wait for an address" guard said *go ahead* for the whole
-  of every recovery AP window — see `reasoning/2026-08-11-22h20`. Travels with the AP
-  window it was broken by, so upstream the two together.
-- `lib/protocol/` gained `ArgType::Float`. Additive, four lines across three files, and
-  the reply side already had `value(float)` — see `reasoning/2026-08-06-20h47`. Until it
-  is upstreamed, a naive copy of `lib/protocol/` from Strux silently breaks `psu set`.
-- `SystemManager::GetDeviceName()` falls back to the build's project name when the stored
-  name is empty — and can never reach it, because the typed default of `device.name` is the
-  literal `"Strux"`, so `Get()` never returns empty. Every fork therefore ships a device
-  called Strux, in the browser tab title, the DHCP hostname and the relay's device list.
-  The one-word fix is a `""` default; the fallback already there is the intended behaviour.
-  Confirmed identical in upstream Strux.
-- `backend.ts` sent `{"type":"writePartition"}` for the streaming upload envelope, but
-  the dispatcher registers `partition write` and refuses anything without a space with
-  "expected: `<category> <command>`". **Firmware upload from the web UI cannot have
-  worked in Strux either.** The neighbouring `partition clear`/`activate` calls in the
-  same function always had it right, which is what hid it.
+What is STILL fork-local in `strux/` and `lib/`, all of it in one area plus one file:
+
+- **A second WiFi network** (`wifi.ssid2`/`wifi.password2`, the rotation, `SwitchSta`,
+  `CurrentSsid`, `DescribeRound`). Upstream cycles STA rounds with AP windows exactly as
+  this fork does, but against ONE network. Still unverified with two actually configured.
+- **RSSI on a LinkDown** (`NetworkEvent::rssi`, `BeaconStrength`) — what tells an AP
+  refusing us from an AP too far away, see `reasoning/2026-08-26-21h22`.
+- **A scan that reports `authmode`, not just `secure`** (`AuthModeName`) — WPA2/WPA3
+  transition mode needs PMF and refuses a station without it, which looks exactly like
+  being out of range. See `reasoning/2026-08-26-21h19`+.
+- **`lib/protocol`'s `ArgType::Float`**, still four lines across three files, still the
+  thing that silently breaks `psu set` if `lib/` is copied naively.
+
+Upstream has since taken, so these are no longer fork edits: the disconnect-reason code
+in `NetworkEvent`, the AP-window cycle, `HasUpstream()`, PMF advertisement, the
+`writePartition` envelope fix, and the blocking-console guard.
+
+**One upstream bug found while syncing, and it is still upstream's.**
+`SystemManager::GetDeviceName()` falls back to the build's project name when the stored
+name is empty and can never reach it, because `device.name`'s typed default is the
+literal `"Strux"`. Every fork therefore ships a device called Strux — in the tab title,
+the DHCP hostname and the relay's device list. A `""` default is the whole fix. Worked
+around here per device: both units are named (`XY6020L`, `DPS5020`).
+
+**`frontend/src/config.ts`'s `DEV_HOST` is stale.** It says `dps50xx.local`, and no
+device answers to that any more — mDNS follows `device.name`, so the two units are
+`xy6020l.local` and `dps5020.local`. Only `pnpm dev` reads it. Part of the unresolved
+rename question below.
 
 **The AP→STA half of the WiFi cycle is unverified on hardware.** Three attempts then a
 15-minute AP window is confirmed on the ESP32 — a round now takes 15 s rather than 30,

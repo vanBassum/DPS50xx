@@ -37,6 +37,7 @@ set(STRUX_SOURCES
     "strux/SettingsManager/SettingsManager.cpp"
     "strux/SettingsManager/Setting.cpp"
     "strux/SystemManager/SystemManager.cpp"
+    "strux/UiManager/UiManager.cpp"
     "strux/ConsoleManager/ConsoleManager.cpp"
     "strux/TimeManager/TimeManager.cpp"
 )
@@ -81,6 +82,7 @@ set(INCLUDE_DIRS_LIST
     "strux/UpdateManager"
     "strux/SettingsManager"
     "strux/SystemManager"
+    "strux/UiManager"
     "strux/ConsoleManager"
     "strux/TimeManager"
     "hardware"
@@ -106,6 +108,9 @@ set(COMPONENT_REQUIRES
     esp_driver_gpio
     # The Modbus RTU transport to the supply.
     esp_driver_uart
+    # Only to report the DFS bounds in `system info` — the scaling itself is
+    # configured by startup code, see CONFIG_PM_ENABLE in sdkconfig.defaults.
+    esp_pm
     mdns
     # The relay drives a WebSocket at the transport layer instead of through
     # esp_websocket_client — see RelaySocket.h for why. esp-tls comes with it for

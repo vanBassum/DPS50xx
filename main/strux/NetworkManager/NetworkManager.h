@@ -78,7 +78,10 @@ class NetworkManager {
     /// (provisioning) and between station rounds (recovery). Credentials are
     /// re-read at the start of every round, so a network provisioned through this
     /// AP is picked up by the next round without a reboot.
-    static constexpr const char* DefaultApSsid = "Strux-AP";
+    ///
+    /// The SSID is composed at Init — `<device.name>-AP-<MAC suffix>` — not a
+    /// constant. See ComposeApSsid.
+    static constexpr const char* ApSsidSuffix = "-AP-";
     static constexpr const char* DefaultApPassword = ""; // Open network
 
 public:
@@ -110,6 +113,11 @@ public:
     /// Associated AP's signal strength in dBm. False when there is none to report
     /// (AP mode, or not associated).
     bool GetRssi(int8_t& out) const { return wifi_interface_.GetRssi(out); }
+
+    /// The active interface's IPv4 address as a dotted quad — the station's when
+    /// associated, the AP's own when serving one. False when there is no address
+    /// yet, which is not the same as an address of 0.0.0.0.
+    bool GetIpv4(char* out, size_t len) const;
 
 private:
     StruxProvider& strux_;
@@ -187,6 +195,21 @@ private:
     /// length of the AP window. Which one is running is apWindowOpen_.
     Timer connectTimer_;
 
+    /// The suffix is unconditional rather than only present on an unnamed device. Two
+    /// devices falling back to an identically-named AP is precisely the situation the
+    /// recovery window exists for — a bench with several of them, none of which joined
+    /// the network — and there would be no way to tell which one you had joined.
+    /// Making it appear only when the name is unset also means the SSID changes
+    /// identity the moment somebody names the device, invalidating the profile every
+    /// client had saved.
+    char apSsid_[33] = {};
+
+    /// Builds apSsid_ from the device name and the SoftAP MAC's low three bytes. The
+    /// name is what gets truncated when the whole thing will not fit in 32 characters:
+    /// the MAC suffix is the part that distinguishes one device from another, so it is
+    /// the part that must survive.
+    void ComposeApSsid();
+
     void HandleNetworkEvent(const NetworkEvent& event);
     void OnCycleTimer();
     void BeginStaRound();
@@ -225,4 +248,12 @@ private:
     inline static StringSetting wifiPassword_ { "wifi.password",  "WiFi Password",          "" };
     inline static StringSetting wifiSsid2_    { "wifi.ssid2",     "WiFi SSID (fallback)",     "" };
     inline static StringSetting wifiPassword2_{ "wifi.password2", "WiFi Password (fallback)", "" };
+
+    // On, because <name>.local is how you find a device whose address you were never
+    // told, and answering the occasional multicast query costs a radio that never
+    // sleeps nothing at all. The fork that wants this off is the one that enabled
+    // modem or light sleep, where every multicast query on the subnet becomes a wake
+    // this device pays for and did not ask for. Read once in Init, so a change takes
+    // effect on the next boot.
+    inline static BoolSetting mdnsEnabled_{ "net.mdns", "mDNS Enabled", true };
 };

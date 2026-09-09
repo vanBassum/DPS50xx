@@ -1,5 +1,4 @@
 import { useEffect } from "react"
-import { ZapIcon, CpuIcon, TerminalIcon, SettingsIcon, DownloadIcon } from "lucide-react"
 import {
   Sidebar,
   SidebarContent,
@@ -16,24 +15,19 @@ import { useDeviceInfo } from "@/hooks/use-device-info"
 import { useLatestRelease } from "@/hooks/use-latest-release"
 import { isNewerVersion } from "@/lib/version"
 import { PreReleaseBadge } from "@/components/PreReleaseBadge"
+import { DeviceInfoDialog } from "@/components/DeviceInfoDialog"
+import { sameRoute, type MaybeRoute, type Route } from "@/shell/registry"
+import { useManifest } from "@/shell/ModuleHost"
+import { declaredPages } from "@/shell/module-registry"
+import { resolveIcon } from "@/shell/icons"
 
-// "Supply" is the product's own screen and stays the "home" page, so a bookmark
-// to "/" still lands on it. The framework's device-info dashboard moved to
-// "Device" rather than being dropped — it is the first place to look when the
-// supply is fine but the board is not.
-const navItems = [
-  { title: "Supply", icon: ZapIcon, page: "home" as const },
-  { title: "Device", icon: CpuIcon, page: "device" as const },
-  { title: "Console", icon: TerminalIcon, page: "console" as const },
-  { title: "Settings", icon: SettingsIcon, page: "settings" as const },
-  { title: "Firmware", icon: DownloadIcon, page: "firmware" as const },
-]
-
-export type Page = (typeof navItems)[number]["page"]
-
+// The sidebar renders navigation; it no longer *defines* it. `shellPages` and the
+// `Route` type moved to shell/registry so that firmware-contributed pages can join
+// the same list without a component owning the router's type.
 interface AppSidebarProps {
-  currentPage: Page
-  onNavigate: (page: Page) => void
+  /// Null while the manifest has not yet said what pages exist.
+  currentRoute: MaybeRoute
+  onNavigate: (route: Route) => void
 }
 
 const statusColor = {
@@ -48,8 +42,12 @@ const statusLabel = {
   disconnected: "Offline",
 } as const
 
-export function AppSidebar({ currentPage, onNavigate }: AppSidebarProps) {
+export function AppSidebar({ currentRoute, onNavigate }: AppSidebarProps) {
   const connection = useConnectionStatus()
+  // Drawn from the manifest, so the nav is complete before a single module bundle has
+  // been fetched. That is the property the manifest-as-command exists to protect.
+  const { status } = useManifest()
+  const modulePages = declaredPages()
   const info = useDeviceInfo()
   const release = useLatestRelease()
   const updateAvailable = info && release && isNewerVersion(info.firmware, release.version)
@@ -71,43 +69,71 @@ export function AppSidebar({ currentPage, onNavigate }: AppSidebarProps) {
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu>
-              {navItems.map((item) => (
-                <SidebarMenuItem key={item.page}>
-                  <SidebarMenuButton
-                    isActive={currentPage === item.page}
-                    onClick={() => onNavigate(item.page)}
-                  >
-                    <item.icon />
-                    <span>{item.title}</span>
-                    {item.page === "firmware" && updateAvailable && (
-                      <span className="ml-auto h-2 w-2 rounded-full bg-emerald-500" />
-                    )}
-                  </SidebarMenuButton>
+              {modulePages.map((page) => {
+                const Icon = resolveIcon(page.icon)
+                return (
+                  <SidebarMenuItem key={`${page.moduleId}/${page.id}`}>
+                    <SidebarMenuButton
+                      isActive={sameRoute(currentRoute, { kind: "module", id: page.id })}
+                      onClick={() => onNavigate({ kind: "module", id: page.id })}
+                    >
+                      <Icon />
+                      <span>{page.title}</span>
+                      {/* The update dot used to hang off a built-in Firmware page.
+                          There is no built-in page any more, so it hangs off whichever
+                          module declares the id "firmware" — which the framework's own
+                          firmware module does. A product that replaces it keeps the
+                          dot by keeping the id. */}
+                      {page.id === "firmware" && updateAvailable && (
+                        <span className="ml-auto h-2 w-2 rounded-full bg-emerald-500" />
+                      )}
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )
+              })}
+
+              {status === "unsupported" && (
+                <SidebarMenuItem>
+                  <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                    This device's UI needs a newer page.
+                  </div>
                 </SidebarMenuItem>
-              ))}
+              )}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
+      {/* The footer is the way in to the device's details. It already shows the
+          version and the link state, so it is where somebody looks when they want to
+          know more about either — which is why Device Info is behind it rather than
+          on the home screen or in a nav entry of its own. A button, not a div with an
+          onClick: keyboard focus and Enter come for free, and a dialog reached only
+          by mouse is a dialog some people cannot reach. */}
       <SidebarFooter className="p-3">
-        <div className="rounded-lg border bg-card p-3 text-xs">
-          {info && (
-            <div className="mb-1.5 flex items-center justify-between">
-              <span className="text-muted-foreground">Version</span>
+        <DeviceInfoDialog>
+          <button
+            type="button"
+            aria-label="Device info"
+            className="w-full cursor-pointer rounded-lg border bg-card p-3 text-left text-xs transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+          >
+            {info && (
+              <div className="mb-1.5 flex items-center justify-between">
+                <span className="text-muted-foreground">Version</span>
+                <div className="flex items-center gap-1.5">
+                  <PreReleaseBadge version={info.firmware} />
+                  <span className="font-mono">{info.firmware}</span>
+                </div>
+              </div>
+            )}
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">Status</span>
               <div className="flex items-center gap-1.5">
-                <PreReleaseBadge version={info.firmware} />
-                <span className="font-mono">{info.firmware}</span>
+                <span className={`h-2 w-2 rounded-full ${statusColor[connection]}`} />
+                <span>{statusLabel[connection]}</span>
               </div>
             </div>
-          )}
-          <div className="flex items-center justify-between">
-            <span className="text-muted-foreground">Status</span>
-            <div className="flex items-center gap-1.5">
-              <span className={`h-2 w-2 rounded-full ${statusColor[connection]}`} />
-              <span>{statusLabel[connection]}</span>
-            </div>
-          </div>
-        </div>
+          </button>
+        </DeviceInfoDialog>
       </SidebarFooter>
     </Sidebar>
   )

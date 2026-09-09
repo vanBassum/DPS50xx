@@ -11,7 +11,7 @@ DPS50xx is ESP32 firmware (ESP-IDF v6.0, C++, FreeRTOS) that drives a DPS5020 be
 - [main/app/PsuManager/](main/app/PsuManager/) — polls the supply, owns `psu get` / `psu set`, registers `psu.poll` and `psu.telem`, records a telemetry point per poll.
 - [main/hardware/drivers/DPS5020.h](main/hardware/drivers/DPS5020.h) — the register map and the retry/offline logic.
 - [main/hardware/boards/](main/hardware/boards/) — `dps50xx_esp32` and `dps50xx_c3`, each owning its pins and binding the drivers.
-- [frontend/src/pages/HomePage.tsx](frontend/src/pages/HomePage.tsx) + [frontend/src/hooks/use-psu.ts](frontend/src/hooks/use-psu.ts) — the dashboard.
+- [frontend/modules/psu/](frontend/modules/psu/) — the dashboard, shipped as a device-hosted UI module rather than a page in the shell. `PsuManager` declares it (`uiPages_`), so it is the page a shell lands on; see *Device-hosted UI modules*.
 
 Nothing in `strux/` is touched by any of that, which is the point: see the "Pulling from Strux" section below.
 
@@ -59,8 +59,10 @@ Frontend (React 19 + TypeScript + Vite + Tailwind + shadcn/ui, package manager i
 ```bash
 cd frontend
 pnpm dev          # hot-reload dev server, proxies WebSocket to a running device
-pnpm build        # tsc -b && vite build && gzip into ../www (embedded in flash as FAT image)
-pnpm typecheck    # tsc -b --noEmit (plain --noEmit checks NOTHING: root tsconfig has files: [])
+pnpm build        # shell + every module, then check-modules, then gzip into ../www
+pnpm build:modules  # just the module bundles (psu, console, settings, firmware)
+pnpm typecheck    # the shell AND every module (plain `tsc --noEmit` checks NOTHING:
+                  # the root tsconfig has files: [])
 ```
 
 **Updating a device over the wire** (no serial cable needed) is **clear → write → activate →
@@ -80,6 +82,11 @@ system reboot
 The frontend lives in its own `www` FAT partition and takes the same four steps (activate is a
 no-op for data). After a `www` write, read an asset back and compare it against the build output —
 nothing validates a filesystem image the way `esp_image` validates an app.
+
+`pnpm dev` gives HMR for the SHELL only. A module's bundle is whatever
+`pnpm build:modules` last produced, so editing one means rebuilding it — see the two dev
+middlewares in `frontend/vite.config.ts`, which exist because neither the import map's
+targets nor `www/modules/*.js.gz` are under the dev server's root.
 
 There are no automated tests; verification is building, flashing, and driving the device over its own wire:
 
@@ -110,7 +117,7 @@ Every layer is the same pair: a **context** owning the layer's instances, and a 
 | Layer | Context (owns) | Provider (exposes) |
 |---|---|---|
 | `main/hardware/` — the **board** | `BoardContext` — driver instances, bus hosts | `BoardProvider` ([hardware/interfaces/BoardProvider.h](main/hardware/interfaces/BoardProvider.h)) — the roles a board owes |
-| `main/strux/` — the **framework** | `StruxContext` — the ten Strux managers | `StruxProvider` ([main/strux/StruxProvider.h](main/strux/StruxProvider.h)) |
+| `main/strux/` — the **framework** | `StruxContext` — the eleven Strux managers | `StruxProvider` ([main/strux/StruxProvider.h](main/strux/StruxProvider.h)) |
 | `main/app/` — the **application** | `AppContext` — this product's managers | `AppProvider` ([main/app/AppProvider.h](main/app/AppProvider.h)) |
 
 [main.cpp](main/main.cpp) is four calls: `board.Init()`, `strux.Init()`, `application.Init()`, then the OTA validity mark. **The order *within* a layer lives in that layer's context**, not here — `StruxContext::Init()` carries Strux's ordering and its constraints (Relay after WebServer, whose `Authenticator` it shares; Telemetry after Relay, down whose pipe it leaves), so a fork pulling a new framework manager gets its position along with it.
@@ -140,7 +147,7 @@ Note: the two source lists are separated so a fork does not fight the template o
   - `boards/<name>/` — one folder per target board: `BoardConfig.h` (pins/constants), `BoardContext.h`/`BoardContext.cpp` (the board's `BoardContext : BoardProvider` — owns every driver instance and bus host; `BoardContext.cpp` is added via `BOARD_SOURCES` in the `board.cmake` fragment), and an optional `sdkconfig.defaults` overlaying the common root one. Selected with `-DBOARD=<name>`; only the chosen board folder is on the include path, so `#include "BoardConfig.h"` and `#include "BoardContext.h"` resolve to it.
   - `interfaces/` — the role interfaces in application vocabulary (`Led`), 1–3 pure-virtual methods each, never chip or GPIO vocabulary — plus `BoardProvider`, which assembles them into the list every board owes. Drivers implement the roles (`GpioLed : Led`); a board without the hardware binds a mock (`MockLed`). Adding a role to `BoardProvider` obliges every board to bind it, so add one only when application code speaks in that role; when the application needs a driver's full API, expose a concrete accessor from `BoardContext` instead and leave `BoardProvider` alone (escape hatch). Multi-instance roles get a semantic enum (`Sensor::Ambient`, never `Sensor_2`) mapped by the board — introduce it with the first multi-instance role.
   - `drivers/` — board-independent chip/peripheral drivers shared by boards (e.g. `GpioLed.h`), taking pins/buses as constructor parameters (passed by the board from its `BoardConfig` constants).
-- `main/strux/` — the framework: the ten managers. Changes when the template improves.
+- `main/strux/` — the framework: the eleven managers. Changes when the template improves.
 - `main/app/` — changes when you add a feature to *this* product. Hardware driver *instances* live in the board's `BoardContext` class, reached via `AppProvider::getBoard()`.
 - `main/lib/` — the substrate all three layers stand on, and **not** part of any of them: RTOS wrappers (`Task`, `Mutex`, `Timer`), `Stream`/`MemoryStream`/`BufferStream`, `JsonWriter`/`JsonReader`, `DateTime`/`TimeSpan`. Rarely changes. The request/reply seam (`CommandContext`, `ArgReader`, `ReplyWriter`) lives in `lib/protocol/`. It sits beside the layers rather than inside `strux/` because the board layer uses `InitState` and the application uses `Timer` — under `strux/` both would be reaching into the framework for them, which is exactly what the layering forbids. The test for whether something belongs here: it names no layer.
 
@@ -176,6 +183,46 @@ uint32_t p = port_.Get();   // NVS value or the typed default
 
 **A key is at most 15 characters** — NVS's limit, asserted in `Register()` at *runtime*, so an over-long key compiles fine and then boot-loops the device on the assert. Nothing catches it earlier. `telemetry.enabled` (17) does not fit; `telem.enabled` does.
 
+### Device-hosted UI modules
+
+**Neither shell contributes anything to a device's navigation.** Every page comes from
+the firmware's own manifest, and the first page it declares is the landing page — so
+this device decides both what its UI is and which part of it you arrive at. A shell is
+the frame, the router, the transport and the theme, and nothing else. This is Strux's
+design; what is specific here is that **the supply is the first module**, so a shell
+opens on the dashboard and `console`/`settings`/`firmware` follow it.
+
+- **The manifest is a command, not a file.** `ui modules` ([UiManager](main/strux/UiManager/))
+  answers with `hostApi` plus the modules and their pages, so nothing about a module
+  travels over HTTP except the bundle itself.
+- **The manager that owns the commands owns the page.** A `UiModule` handed to
+  `UiManager::Register()` from the manager's own `Init()`, exactly like a command table
+  or a setting — [PsuManager](main/app/PsuManager/) declares `psu`, and the framework's
+  managers declare theirs. `UiManager` head-inserts and the app initialises after the
+  framework, which is why the product's page comes first.
+- **The module cannot import the shell.** It gets `ShellProvider` (`transport.request`,
+  `upload`, `download`, `logs`, `routes`, `ui`) and draws with
+  [frontend/modules/_ui/](frontend/modules/_ui/) — plain elements over the shells'
+  design tokens, because the device shell is radix-ui and the relay's is `@base-ui/react`.
+  **No icon library either**: the import map declares only React, so a lucide import
+  would be bundled and `scripts/check-modules.mjs` fails the build on any bare specifier
+  the map does not declare.
+- **One React, via an import map.** Two React copies is the one thing that genuinely
+  breaks — every hook throws — so modules build `react`/`react/jsx-runtime` as external
+  and the shell publishes them at `assets/host-react.js`.
+- **Adding a module:** a folder under `frontend/modules/<id>/` whose `vite.config.ts` is
+  one call to `moduleConfig(import.meta.dirname, "<id>")`, a line in
+  `frontend/package.json`'s `build:modules` **and** `typecheck`, and a `UiModule`
+  registration in the manager that owns the feature.
+- **The full rationale is upstream's**, in Strux's own CLAUDE.md and its
+  `docs/reasoning/2026-09-09-21h50`+ notes — including why a module's `<style>` goes
+  FIRST in `<head>` and why a module must not write `hidden md:block`.
+
+`www` now holds the shell plus four module bundles, and `CONFIG_LWIP_MAX_SOCKETS=16` in
+`sdkconfig.defaults` is load-bearing for it: the import map makes a page load four
+concurrent requests, and at IDF's default of 10 sockets `esp_http_server` is entitled to
+the whole budget and resets whichever connection loses the race.
+
 ### Deliberately out of scope
 
 **MQTT and Home Assistant.** This firmware had both before the Strux port and they were deliberately not carried across. Strux removed them upstream on 2026-07-06 on the grounds that a device existing to live in Home Assistant is better served by ESPHome, and this product wants its own UI plus relay-based remote access instead. The old `MqttManager` and `HomeAssistantManager` are in this repo's history (branch `main` before the port, and Strux's own history at `4a41d74`) if that judgement ever needs revisiting — do not write new ones.
@@ -184,17 +231,50 @@ uint32_t p = port_.Get();   // NVS value or the typed default
 
 ## Pulling from Strux
 
-The layer split is what makes this cheap, so keep it intact: `strux/` should stay byte-identical to upstream, and everything this product adds should live in `app/`, `hardware/`, or the frontend. Pulling an improvement is then copying directories rather than merging:
+The layer split is what makes this cheap, so keep it intact: everything this product adds
+belongs in `app/`, `hardware/`, or the frontend, and `main/CMakeLists.txt` splits
+`STRUX_SOURCES` from `APP_SOURCES` so a new framework manager is one added line here and
+nothing else moved.
+
+**But it is a merge, not a copy, and pretending otherwise loses work.** `strux/` is NOT
+byte-identical: this fork's WiFi station/AP cycling ran ahead of upstream for a month
+(second network, RSSI on a LinkDown, `authmode` in a scan) and upstream edited the same
+files. A `cp -r` of `main/strux` would have silently reverted all of it. What is
+fork-local at any moment is in [docs/next-up.md](docs/next-up.md); the sync itself is
+`docs/reasoning/2026-09-09-23h20`.
+
+The procedure that works, and it needs no guesswork about what diverged:
 
 ```bash
-cp -r ../Strux/main/strux    main/
-cp -r ../Strux/main/lib      main/          # but see the ArgType::Float note
-cp -r ../Strux/docs/reasoning docs/
+git remote add strux ../Strux && git fetch strux        # once
 ```
 
-`main/CMakeLists.txt` splits `STRUX_SOURCES` from `APP_SOURCES` for exactly this reason — a new framework manager means adding a line to the first list, and nothing else here moves. Note the two lists are still *one* file and one ESP-IDF component; making `strux/` a real component is the step that would turn this into a proper dependency, and it has not been taken upstream either.
+1. **Classify every file.** For each file under `main/strux` and `main/lib`, compare its
+   blob against every recent `strux/main` commit. Identical to upstream HEAD → nothing to
+   do. Identical to an OLDER commit → we never touched it, so **copy** it. Matching no
+   commit → **fork-local**, and it needs a real merge.
+2. **Find the base per fork-local file**, as the newest blob that appears in *both*
+   histories for that path (`git rev-list HEAD -- <path>` against the same for
+   `strux/main`). Then `git merge-file --diff3 ours base theirs`, or cherry-pick upstream's
+   individual commits onto ours when the file has diverged too far for that to be readable
+   — which is what the WiFi files needed.
+3. **Then the things outside those directories**: `CMakeLists.txt` (root and `main/`),
+   `sdkconfig.defaults`, `main.cpp`, and the frontend's shell/contract/`modules/_ui`.
+   Diff with `--strip-trailing-cr`: the two repos disagree about line endings, and without
+   it every file looks 100 % changed.
+4. **Copy the new reasoning notes** (`cp -r ../Strux/docs/reasoning docs/`) — they are
+   append-only and immutable, so this one really is a copy.
 
-**One fork edit lives outside those directories, and it is debt:** `lib/protocol/` gained `ArgType::Float` (enum value, two `Required`/`Optional` overloads, one `case` each in `JsonArgReader` and `DescribeArgReader`). The reply side already had `value(float)`, so the asymmetry is the argument that it belongs upstream. Until it is contributed back, a naive copy of `lib/protocol/` from Strux will silently break `psu set`. See `docs/reasoning/2026-08-06-20h47`.
+Regenerating a `sdkconfig` after a sync is now enforced rather than remembered: the root
+`CMakeLists.txt` carries upstream's drift guard, which fails the build naming any option
+the defaults ask for that the generated config does not have.
+
+**One fork edit lives outside `strux/`, and it is debt:** `lib/protocol/` gained
+`ArgType::Float` (enum value, two `Required`/`Optional` overloads, one `case` each in
+`JsonArgReader` and `DescribeArgReader`). The reply side already had `value(float)`, so
+the asymmetry is the argument that it belongs upstream. Until it is contributed back, a
+naive copy of `lib/protocol/` from Strux will silently break `psu set`. See
+`docs/reasoning/2026-08-06-20h47`.
 
 ## Conventions
 

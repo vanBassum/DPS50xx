@@ -3,9 +3,11 @@
 #include "StruxProvider.h"
 #include "InitState.h"
 #include "CommandEntry.h"
+#include "UiModule.h"
 #include "Mutex.h"
 #include "Task.h"
 #include "freertos/queue.h"
+#include <atomic>
 #include <cstdint>
 
 class Stream;
@@ -45,6 +47,15 @@ private:
     // Async broadcast via queue + task
     QueueHandle_t queue_ = nullptr;
     Task broadcastTask_;
+
+    /// The broadcast task itself, learned when its loop starts. Sending a line to a
+    /// client that has gone away makes esp_http_server log the failure, and this
+    /// manager captures every log line there is — so that warning became one more line
+    /// to send, down the same dead socket, which logged again. One dropped client turned
+    /// into hundreds of lines in a few milliseconds, bounded only by this queue filling
+    /// up. Lines raised on this task still reach the serial console and the ring buffer;
+    /// what they no longer do is go back down the pipe that raised them.
+    std::atomic<TaskHandle_t> broadcastTaskHandle_{nullptr};
     BroadcastFunc broadcastFunc_ = nullptr;
     void* broadcastCtx_ = nullptr;
 
@@ -61,6 +72,14 @@ private:
 
     // ── WebSocket commands (registered with CommandManager in Init) ──
     RequestError Cmd_GetLogs(CommandContext& ctx);
+
+    // ── UI. The browser half of this manager's own commands, shipped as a module
+    // in `www` and declared here so a shell can draw its nav without loading any
+    // module code. It is a module and not a shell page because a shell contributes
+    // nothing to a device's navigation — see docs/reasoning. What makes it the
+    // framework's rather than a product's is the log buffer and the session-0 broadcast, both of which this manager owns.
+    inline static const UiPage uiPages_[] = { { "console", "Console", "terminal" } };
+    inline static UiModule uiModule_{ "console", "/modules/console.js", uiPages_ };
 
     inline static CommandEntry commands_[] = {
         { "log", "list", &InvokeCommand<&ConsoleManager::Cmd_GetLogs> },

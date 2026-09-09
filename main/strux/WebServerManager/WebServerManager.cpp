@@ -89,6 +89,14 @@ void WebServerManager::StartServer()
     };
     config.lru_purge_enable = true;
 
+    // esp_http_server narrates a client disappearing as three warnings — a recv
+    // errno, an unmasked frame read from the corpse of the connection, and a failed
+    // send — none of which a reader can act on, and all of which a browser produces
+    // every time a tab closes. At ERROR these components still report faults that
+    // are this device's own. Raise them when debugging the transport itself.
+    esp_log_level_set("httpd_txrx", ESP_LOG_ERROR);
+    esp_log_level_set("httpd_ws", ESP_LOG_ERROR);
+
     esp_err_t err = httpd_start(&server_, &config);
     if (err != ESP_OK)
     {
@@ -191,8 +199,15 @@ RequestError WebServerManager::Cmd_AuthHello(CommandContext& ctx)
 {
     RETURN_IF_ERROR(ctx.readArgs());
 
+    // Per CONNECTION, not per device. A transport whose peer is already proven
+    // has nothing left to ask for, while a browser socket on a password-protected
+    // device does — and both arrive here. Asking the Authenticator alone told a
+    // remote browser riding an authenticated relay pipe to log in with a password
+    // it has no way to know.
+    const bool alreadyAuthed = ctx.connection && ctx.connection->isAuthed();
+
     auto resp = ctx.reply.object();
-    resp.field("authRequired", auth_.AuthRequired());
+    resp.field("authRequired", !alreadyAuthed && auth_.AuthRequired());
     return RequestError::Ok;
 }
 

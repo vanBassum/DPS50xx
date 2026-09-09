@@ -479,26 +479,6 @@ class BackendService {
     return this.send("system reboot")
   }
 
-  async getPsu(): Promise<PsuData> {
-    return this.send<PsuData>("psu get")
-  }
-
-  /** Apply any subset of the setpoints in ONE command — the device leaves an
-   *  omitted field alone and skips the Modbus write for anything unchanged, so
-   *  there is no reason to split these into separate calls. Resolves with what
-   *  the supply holds afterwards; `ok: false` carries the Modbus error. */
-  async setPsu(changes: PsuSetpoints): Promise<PsuSetResult> {
-    return this.send<PsuSetResult>("psu set", changes)
-  }
-
-  /** Write ONE capability by name, validated on the device against that
-   *  capability's own range. This is how the long tail — protection thresholds
-   *  and whatever the next supply adds — is configured without this file
-   *  growing a method per register. */
-  async writePsu(key: string, value: number): Promise<PsuWriteResult> {
-    return this.send<PsuWriteResult>("psu write", { key, value })
-  }
-
   /** Returns false on wrong password; throws on connection failure. On success
    *  stores the session key and marks the connection authenticated. */
   async login(password: string): Promise<boolean> {
@@ -512,8 +492,71 @@ class BackendService {
     return true
   }
 
-  /** Upload a .bin as one streamed `partition write` session: an envelope chunk
-   *  ({"type":"partition write","partition":...}\n) followed by body chunks, the
+  /** One command whose REQUEST has a body: an envelope chunk (not FINAL), then
+   *  `body` streamed on the same session in window-sized pieces, then one reply.
+   *
+   *  The generic form of what `uploadPartition` does by hand. It exists because
+   *  `partition write` is not the only command shaped like this and, more to the
+   *  point, because a UI module needs to reach this shape through the shell contract
+   *  — and the contract cannot offer a method whose only implementation is
+   *  partition-specific. What is NOT here is the erase-write-activate sequence: that
+   *  is partition policy and belongs to whoever knows about partitions, which is the
+   *  firmware module, not this transport.
+   *
+   *  Runs through the open queue, so nothing else touches the socket mid-upload — the
+   *  device would REJECT an interleaved session id. */
+  async uploadSession<T>(
+    type: string,
+    params: Record<string, unknown> | undefined,
+    body: Blob,
+    onProgress?: (fraction: number) => void,
+  ): Promise<T> {
+    return this.enqueue(async () => {
+      await this.ensureConnected()
+
+      const session = this.allocSession()
+      const total = body.size
+
+      // Progress is DEVICE-driven: the handler streams {"p":<bytesWritten>} as it
+      // works, and those are mapped to a fraction. Client-side "bytes sent" cannot
+      // see the device's write position — the OS buffers the socket — so it would
+      // race to 1 while the write is still in flight.
+      const reply = this.awaitReply<T>(session, {
+        timeoutMs: 120000,
+        onMessage: (msg: Record<string, unknown>) => {
+          if (total && typeof msg.p === "number")
+            onProgress?.(Math.min(1, msg.p / total))
+        },
+      })
+
+      const envelope = new TextEncoder().encode(
+        JSON.stringify({ type, ...(params ?? {}) }) + "\n",
+      )
+      this.sendChunk(session, 0, envelope)
+
+      // CHUNK matches the device's inbound window: a larger frame is refused, not
+      // split.
+      const CHUNK = 4096
+      let sent = 0
+      while (sent < total) {
+        const end = Math.min(sent + CHUNK, total)
+        const slice = new Uint8Array(await body.slice(sent, end).arrayBuffer())
+        const isLast = end >= total
+        await this.drainBuffer()
+        this.sendChunk(session, isLast ? FLAG_FINAL : 0, slice)
+        sent = end
+      }
+      // A zero-length body still needs a FINAL to close the request direction.
+      if (total === 0) this.sendChunk(session, FLAG_FINAL, new Uint8Array(0))
+
+      const result = await reply
+      onProgress?.(1)
+      return result
+    })
+  }
+
+  /** Upload a .bin as one streamed `writePartition` session: an envelope chunk
+   *  ({"type":"writePartition","partition":...}\n) followed by body chunks, the
    *  last carrying FLAG_FINAL. The device drains it straight to flash and replies
    *  once, at end-of-stream. Runs through the open queue, so nothing else touches
    *  the socket mid-upload (the device would REJECT an interleaved session id). */
@@ -548,11 +591,9 @@ class BackendService {
       })
 
       // Envelope chunk (not FINAL — the body follows on the same session id).
-      // Two-part route, like every other command — the dispatcher splits `type`
-      // on the space and refuses anything else with "expected: <category>
-      // <command>". `writePartition` here was inherited from Strux and made
-      // every firmware upload from the UI fail; the neighbouring `partition
-      // clear`/`activate` calls always had it right, which is what hid it.
+      // The route is TWO words: ReadCommandRoute splits "<category> <command>" and
+      // rejects a single-word type outright, so "writePartition" never reached the
+      // handler — every upload from this page was refused before it started.
       const envelope = new TextEncoder().encode(JSON.stringify({ type: "partition write", partition }) + "\n")
       this.sendChunk(session, 0, envelope)
 
@@ -588,6 +629,60 @@ class BackendService {
     while (this.ws && this.ws.bufferedAmount > limit) {
       await new Promise((r) => setTimeout(r, 20))
     }
+  }
+
+  /** One command whose REPLY is a stream: the envelope goes out as a single FINAL
+   *  chunk and the device writes bytes back until it FINALs, with no length header.
+   *
+   *  The generic form of `downloadPartitionFile`, and the mirror of `uploadSession`.
+   *  It stops at the bytes on purpose: saving a file is a host concern — an anchor
+   *  click here, something else in another shell — while "give me the bytes" is the
+   *  same question everywhere, which is what makes it expressible in the contract.
+   *
+   *  `total`, when the caller knows it, is used for progress AND for a length check.
+   *  The device always streams a whole partition, so a short read means a mid-stream
+   *  flash or socket failure produced a truncated image followed by a FINAL — which
+   *  would otherwise be saved as a corrupt file that looks fine.
+   *
+   *  Runs through the open queue, so it owns the socket until it finishes: the device
+   *  would REJECT an interleaved session id. */
+  async downloadSession(
+    type: string,
+    params: Record<string, unknown> | undefined,
+    total?: number,
+    onProgress?: (fraction: number) => void,
+  ): Promise<Blob> {
+    const buf = await this.enqueue(async () => {
+      await this.ensureConnected()
+      const session = this.allocSession()
+      const reply = this.awaitReply<Uint8Array<ArrayBuffer>>(session, {
+        timeoutMs: 120000,
+        binary: true,
+        onData: (received) => {
+          if (total) onProgress?.(Math.min(1, received / total))
+        },
+      })
+      const body = new TextEncoder().encode(
+        JSON.stringify({ type, ...(params ?? {}) }) + "\n",
+      )
+      this.sendChunk(session, FLAG_FINAL, body)
+      return reply
+    })
+
+    // A short reply that parses as a JSON error means the device refused instead of
+    // streaming bytes — an unknown partition, say. It arrives as a successful reply,
+    // so it has to be read out of the payload or a failure becomes a tiny "image".
+    if (buf.length < 256) {
+      const text = new TextDecoder().decode(buf)
+      if (text.startsWith('{"ok":false'))
+        throw new Error(JSON.parse(text).error ?? "download failed")
+    }
+
+    if (total && buf.length !== total)
+      throw new Error(`incomplete download: got ${buf.length} of ${total} bytes`)
+
+    onProgress?.(1)
+    return new Blob([buf])
   }
 
   /** Download a partition image as one outbound streamed session and save it as
@@ -656,6 +751,8 @@ export interface DeviceInfo {
   date: string
   time: string
   chip: string
+  cpu: string
+  ip: string
   heapFree: number
   heapMin: number
   deviceTime: string
@@ -717,132 +814,5 @@ export interface Partition {
 
 export interface PartitionsResponse {
   partitions: Partition[]
-}
-
-// ── The supply ───────────────────────────────────────────────
-
-/** One capability of the supply: something it can do or report, already
- *  normalized by its driver.
- *
- *  This is NOT a device register. An XY6020L keeps its runtime in three
- *  registers and reports an unconnected probe as 8888; neither of those facts
- *  reaches this file, because the driver turns storage into meaning before
- *  anything gets here. So there is no PROTECTION_LABELS table, no "888.8 means
- *  no sensor", and no h/m/s arithmetic in React — only `kind`, `group`, `unit`
- *  and a value.
- *
- *  A capability this build has never heard of still renders: that is the point
- *  of the schema travelling with the value. */
-export interface PsuCapability {
-  label: string
-  unit: string
-  /** How to read `value`: a measurement, a 0/1, a code with `options`, or a
-   *  whole number of SECONDS this side formats as HH:MM:SS. */
-  kind: "number" | "bool" | "enum" | "duration"
-  /** Which section of the UI it belongs to — the DRIVER decides, so this file
-   *  keeps no list of keys to sort them by. */
-  group: "core" | "session" | "protection" | "info"
-  value: number
-  /** Absent means present. False is the supply saying it has no value right
-   *  now — an unplugged probe, or registers that did not answer. */
-  available?: boolean
-  /** Enums only: the supply's own name for the code in `value`. */
-  valueLabel?: string
-  /** Enums only: every code's name, in order, so a selector can be drawn. */
-  options?: string[]
-  access: "r" | "rw"
-  /** Writable capabilities only, in the same units as `value`. The supply's own
-   *  limits — the browser no longer hardcodes 50 V and 20 A. */
-  min?: number
-  max?: number
-}
-
-export interface PsuData {
-  /** False when the supply missed enough consecutive polls to be declared gone
-   *  — the values are then the last ones successfully read. */
-  online: boolean
-  /** Keyed by capability name, in the driver's declaration order. */
-  capabilities: Record<string, PsuCapability>
-}
-
-/** The capabilities this UI addresses BY MEANING: it charts three, edits two,
- *  toggles two, and names one in a status line. Everything else it renders from
- *  `group` without knowing what it is. These are semantic names — no supply's
- *  register map appears here. */
-export const PSU_KEYS = {
-  setVoltage: "setVoltage",
-  setCurrent: "setCurrent",
-  outputVoltage: "outputVoltage",
-  outputCurrent: "outputCurrent",
-  outputPower: "outputPower",
-  inputVoltage: "inputVoltage",
-  outputEnabled: "outputEnabled",
-  keyLock: "keyLock",
-  constantCurrent: "constantCurrent",
-  protectionState: "protectionState",
-  activePreset: "activePreset",
-} as const
-
-export function psuCapability(d: PsuData | null, key: string): PsuCapability | undefined {
-  return d?.capabilities?.[key]
-}
-
-export function psuNumber(d: PsuData | null, key: string, fallback = 0): number {
-  return psuCapability(d, key)?.value ?? fallback
-}
-
-export function psuFlag(d: PsuData | null, key: string): boolean {
-  return (psuCapability(d, key)?.value ?? 0) !== 0
-}
-
-/** Every capability in one group, in the order the driver declared them. This
- *  is what replaced a hardcoded list of "extra" keys. */
-export function psuGroup(
-  d: PsuData | null,
-  group: PsuCapability["group"],
-): [string, PsuCapability][] {
-  return Object.entries(d?.capabilities ?? {}).filter(([, c]) => c.group === group)
-}
-
-/** True when the supply has a value for this right now. */
-export function psuAvailable(c: PsuCapability | undefined): boolean {
-  return c !== undefined && c.available !== false
-}
-
-/** Every field optional — the device leaves an omitted one alone.
- *
- *  A `type` and not an `interface` on purpose: `send` takes
- *  Record<string, unknown>, and TypeScript only grants an implicit index
- *  signature to an aliased object type. An interface here needs a cast at
- *  every call site. */
-export type PsuSetpoints = {
-  voltage?: number
-  current?: number
-  output?: boolean
-  keyLock?: boolean
-  backlight?: number
-}
-
-/** What the supply holds after the write, echoed under CAPABILITY keys so it
- *  folds straight back into what `psu get` gave. Every field optional because
- *  the device echoes only what it actually has — a supply with no display to
- *  light sends no `backlight`. */
-export interface PsuSetResult {
-  ok: boolean
-  /** Present only when ok is false: the Modbus error, or a rejected setpoint. */
-  error?: string
-  setVoltage?: number
-  setCurrent?: number
-  outputEnabled?: boolean
-  keyLock?: boolean
-  backlight?: number
-}
-
-/** Result of writing one capability by key. */
-export interface PsuWriteResult {
-  ok: boolean
-  error?: string
-  key?: string
-  value?: number
 }
 

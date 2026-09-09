@@ -1,4 +1,5 @@
 #include "ConsoleManager.h"
+#include "UiManager.h"
 #include "CommandManager.h"
 #include "JsonWriter.h"
 #include "ReplyWriter.h"
@@ -26,7 +27,13 @@
 // (CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG), which is a best-effort ROM path
 // that drops instead of waiting, and every byte still reaches the USB port.
 #if defined(CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG) && !defined(STRUX_ALLOW_BLOCKING_CONSOLE)
-#error "USB Serial/JTAG is the PRIMARY console, whose write blocks on the USB host. Every task's log line goes through ConsoleManager::LogOutput -> vprintf, so this stalls the Wi-Fi and lwIP tasks and shows up as heavy packet loss. Use CONFIG_ESP_CONSOLE_UART_DEFAULT=y with CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y instead: USB still carries all output. Define STRUX_ALLOW_BLOCKING_CONSOLE only if you have measured that your build can afford it."
+#error "USB Serial/JTAG is the PRIMARY console, whose write blocks on the USB host. \
+Every task's log line goes through ConsoleManager::LogOutput -> vprintf, so this \
+stalls the Wi-Fi and lwIP tasks and shows up as heavy packet loss. Use \
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y with \
+CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y instead: USB still carries all \
+output. Define STRUX_ALLOW_BLOCKING_CONSOLE only if you have measured that your \
+build can afford it."
 #endif
 
 ConsoleManager* ConsoleManager::s_instance_ = nullptr;
@@ -68,6 +75,9 @@ void ConsoleManager::Init()
     // ConsoleManager initializes before CommandManager::Init() — fine by
     // design: the registry is usable from construction.
     strux_.getCommandManager().Register(this, commands_);
+    // UiManager initialises after this manager, which is fine: Register() only takes
+    // a mutex and links a chain, exactly like the command table above.
+    strux_.getUiManager().Register({ &uiModule_ });
 
     initAttempt.SetReady();
     ESP_LOGI(TAG, "Initialized (capturing stdout)");
@@ -124,7 +134,10 @@ void ConsoleManager::FlushLine()
 
     StoreLine(lineBuf_, lineLen_);
 
-    if (queue_)
+    // See broadcastTaskHandle_: anything logged while a broadcast is in flight is a
+    // side effect of that broadcast, and queueing it is what turns one dead socket into
+    // a flood. It is still stored above, so `log list` and the serial console keep it.
+    if (queue_ && xTaskGetCurrentTaskHandle() != broadcastTaskHandle_.load())
     {
         LogQueueItem item = {};
         snprintf(item.text, sizeof(item.text), "%s", lineBuf_);
@@ -148,6 +161,10 @@ void ConsoleManager::BroadcastTaskLoop()
 {
     LogQueueItem item;
 
+    // Learned here rather than from Task, which does not expose its handle — and this
+    // is the one place that is certainly running on it.
+    broadcastTaskHandle_.store(xTaskGetCurrentTaskHandle());
+
     while (true)
     {
         if (xQueueReceive(queue_, &item, portMAX_DELAY) != pdTRUE)
@@ -169,15 +186,38 @@ void ConsoleManager::BroadcastTaskLoop()
 
 void ConsoleManager::WriteHistory(ReplyObject& resp) const
 {
-    LOCK(mutex_);
+    // The lock is NOT held across the writes to `resp`, and that is the whole point
+    // of the shape below. `resp` goes to the transport on every value, so writing 200
+    // lines under this mutex holds it for the length of a 40 KB network reply — while
+    // StoreLine takes the same mutex from whatever task just logged, which includes
+    // the Wi-Fi and lwIP tasks. Opening the Console page could therefore stall the
+    // network stack for as long as its own reply took to send.
+    //
+    // That is the same defect as the blocking console this file guards against at the
+    // top: a network-speed operation blocking a task that only wanted to log a line.
+    // So snapshot the bounds, then copy one line at a time and release between lines.
+    int32_t start = 0;
+    int32_t total = 0;
+    {
+        LOCK(mutex_);
+        total = count_;
+        start = (count_ < MAX_LINES) ? 0 : head_;
+    }
 
     auto lines = resp.array("lines");
 
-    int32_t start = (count_ < MAX_LINES) ? 0 : head_;
-    for (int32_t i = 0; i < count_; i++)
+    for (int32_t i = 0; i < total; i++)
     {
-        int32_t idx = (start + i) % MAX_LINES;
-        lines.value(lines_[idx]);
+        // One line, one short lock. If the ring wraps while this reply is streaming,
+        // a slot may hold a newer line than it did at the snapshot — a log dump can
+        // live with that, and it is a much better trade than the alternative.
+        char line[MAX_LINE_LEN];
+        {
+            LOCK(mutex_);
+            const int32_t idx = (start + i) % MAX_LINES;
+            snprintf(line, sizeof(line), "%s", lines_[idx]);
+        }
+        lines.value(line);
     }
 }   // `lines` closes here; caller's `resp` stays usable (auto-detached)
 
