@@ -71,6 +71,14 @@ Upstream has since taken, so these are no longer fork edits: the disconnect-reas
 in `NetworkEvent`, the AP-window cycle, `HasUpstream()`, PMF advertisement, the
 `writePartition` envelope fix, and the blocking-console guard.
 
+**DFS is off in this fork, and the reason is worth reporting upstream.** Upstream's
+defaults enable `CONFIG_PM_ENABLE`/`CONFIG_PM_DFS_INIT_AUTO` and price it at "a few
+microseconds of extra interrupt latency". On a C3 serving this UI it cost `system ping`
+3925 ms against 72 ms, and produced 45 % ICMP loss that looked for hours like a marginal
+radio — the CPU could not drain its RX path, so packets were dropped and TCP paid
+retransmit backoff. See `reasoning/2026-09-10-00h40`; the pacing test in it is the cheap
+way to tell a starved chip from a weak link.
+
 **One upstream bug found while syncing, and it is still upstream's.**
 `SystemManager::GetDeviceName()` falls back to the build's project name when the stored
 name is empty and can never reach it, because `device.name`'s typed default is the

@@ -19,29 +19,24 @@ CONFIG_FATFS_MAX_LFN=255
 # OTA rollback — pairs with esp_ota_mark_app_valid_cancel_rollback() in main.cpp
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 
-# Dynamic frequency scaling: the CPU drops to the XTAL frequency whenever no task
-# holds a power-management lock, which on a device waiting for a request is nearly
-# all the time. DFS_INIT_AUTO configures it from startup code — max = the default
-# CPU frequency, min = XTAL — so no call is needed here; a fork wanting other bounds
-# calls esp_pm_configure() and overrides them. `system info` reports what took.
+# Dynamic frequency scaling: DELIBERATELY NOT ENABLED in this fork.
 #
-# WiFi holds an APB_FREQ_MAX lock (esp_wifi's "wifi" lock, released only by modem
-# sleep) and WIFI_PS_NONE — set deliberately, see WiFiInterface.cpp — never lets it
-# go. APB at 80 MHz needs the PLL, so with the radio up the floor is 80 MHz and not
-# the XTAL's 40; the 160 -> 80 step is still most of the saving, and the XTAL floor
-# applies while the radio is down between station rounds.
+# Upstream's sdkconfig.defaults turns on CONFIG_PM_ENABLE + CONFIG_PM_DFS_INIT_AUTO,
+# which lets the CPU idle down to the XTAL frequency. This fork does not take it, and
+# the reason is the relay: `wss://` is TLS, so every command that arrives down the
+# relay pipe costs a software crypto pass on top of the JSON, where a command from a
+# browser on the LAN costs neither. On a downclocked C3 that is paid per request, and
+# it presents as a UI whose pages appear instantly and whose DATA crawls -- but only
+# through the relay, which is what made it look like a transport problem.
 #
-# The cost is a few microseconds of extra interrupt latency and coarser RTOS tick
-# timekeeping. The console is unaffected: esp_pm re-clocks the console UART off
-# REF_TICK/XTAL so its baud rate does not follow APB.
+# A bench supply is mains-powered and its job is to answer promptly. If a
+# battery-powered fork ever wants the saving back, it should measure relay command
+# latency at 40 MHz first, and read docs/reasoning/2026-09-02-15h52 (from Strux) for
+# why tickless idle is not the free prerequisite it looks like.
 #
-# NOT enabled: FREERTOS_USE_TICKLESS_IDLE. It reads like a free prerequisite for
-# light sleep and is not one — esp_pm's get_lowest_allowed_mode() never returns
-# PM_MODE_LIGHT_SLEEP while light_sleep_enable is false, so tickless idle without
-# light sleep buys nothing and still costs tick accuracy. The two go together, and
-# together they are a battery-powered fork's decision, not the template's.
-CONFIG_PM_ENABLE=y
-CONFIG_PM_DFS_INIT_AUTO=y
+# Left as two comments rather than `CONFIG_PM_ENABLE=n`: a disabled bool is written to
+# the generated sdkconfig as `# CONFIG_PM_ENABLE is not set`, which the drift guard in
+# the root CMakeLists.txt would read as a mismatch against an `=n` assertion here.
 
 # lwIP socket budget, and the reason it cannot stay at IDF's default of 10.
 #
