@@ -49,7 +49,7 @@ every setpoint at once, and max charge / max energy / max runtime are 32-bit or 
 values that would need a multi-register write `ModbusPsu` does not do. The UI shows them and does
 not pretend to set them.
 
-**Four fixes want pushing back to Strux.**
+**Five fixes want pushing back to Strux.**
 
 - `WiFiInterface` logs the disconnect reason by name, and `NetworkManager` alternates
   station rounds with AP windows instead of ending in either — see
@@ -66,6 +66,12 @@ not pretend to set them.
 - `lib/protocol/` gained `ArgType::Float`. Additive, four lines across three files, and
   the reply side already had `value(float)` — see `reasoning/2026-08-06-20h47`. Until it
   is upstreamed, a naive copy of `lib/protocol/` from Strux silently breaks `psu set`.
+- `SystemManager::GetDeviceName()` falls back to the build's project name when the stored
+  name is empty — and can never reach it, because the typed default of `device.name` is the
+  literal `"Strux"`, so `Get()` never returns empty. Every fork therefore ships a device
+  called Strux, in the browser tab title, the DHCP hostname and the relay's device list.
+  The one-word fix is a `""` default; the fallback already there is the intended behaviour.
+  Confirmed identical in upstream Strux.
 - `backend.ts` sent `{"type":"writePartition"}` for the streaming upload envelope, but
   the dispatcher registers `partition write` and refuses anything without a space with
   "expected: `<category> <command>`". **Firmware upload from the web UI cannot have
