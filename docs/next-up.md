@@ -19,15 +19,30 @@ which is the only verification that counts here. Check in all three: the status 
 flex row, the session grid is three columns above `sm`, the setpoint rows are spaced, and
 dark mode follows the shell rather than the OS.
 
-Two loose ends from it:
+**Both shells are on shadcn preset `b0` now, and their token sets are provably equal** —
+103 tokens in both, zero differing values (the device shell has `--destructive-foreground`
+extra and no module names it). The relay was already on the preset; the device shell never
+had been, which is where the typeface and radius divergence came from. See
+`reasoning/2026-09-10-13h20`. Re-check with the token diff in that note after any future
+`shadcn apply`.
 
-- **The device shell publishes no `--font-mono` and a different `--font-sans`** (system-ui)
-  from the relay's Inter, so the module's typeface still differs between hosts. That is now
-  the shell's choice rather than a cascade accident; if they are meant to match, match the
-  token — the cost is a font file in the `www` partition.
-- **`shell-contract/contract.ts` gained the host-obligations comment** and the relay's
-  vendored copy was updated in step (`C:\Workspace\strux-relay`, comment only, uncommitted
-  there). CI compares the two, so they must land together.
+Three things it left:
+
+- **Inter costs 213 KB of `www` and 166 KB of that can never be served.** Seven
+  `unicode-range`-gated subsets ship; only latin (47 KB) is ever requested by an English
+  UI, but flash holds all of them. `www` is now 392 KB of the 917 KB partition. The prune
+  is one import away and was NOT taken, because the next `shadcn apply` would silently undo
+  it. Take it if the partition gets tight.
+- **The preset upgraded every shadcn component**, which brought `cn` (shadcn's own
+  clsx+tailwind-merge replacement, published four days ago) and `next-themes` into the
+  device shell. `next-themes` is only there because the current `sonner.tsx` imports
+  `useTheme`, and this shell has no theme provider — `useTheme()` outside one returns
+  undefined and the default `"system"` applies, so it works, but the dependency earns
+  nothing.
+- **`shell-contract/contract.ts`'s host-obligations comment is fork-local**, and belongs
+  upstream in Strux with `ArgType::Float`. The file is vendored FROM Strux, not owned here:
+  the relay hash-locks its copy against `vanBassum/Strux` and checks it over the network,
+  so editing the relay's copy broke its build and was reverted there.
 
 **The XY6020L runs on hardware, on the capability model, updated over the air.** Flashed to the
 C3 at `E8:3D:C1:9C:1C:CC`, then twice updated by OTA with no cable attached. What the unit
@@ -153,6 +168,7 @@ from its front panel, so the firmware now refuses to reproduce a setpoint the pa
 allows. Either the cap is the product's rating and the asymmetry is intended, or it
 should follow what the register accepts. Not decided.
 
-**The `www` partition shrank to 0xE0000 (917 KB)** and the current bundle is 253 KB
-gzipped. Plenty, but `recharts` is most of the 816 KB uncompressed JS — worth knowing
-before adding another charting dependency.
+**The `www` partition shrank to 0xE0000 (917 KB)** and the current bundle is 392 KB —
+253 KB before Inter arrived with the shadcn preset. Still plenty, but `recharts` is most
+of the uncompressed JS and Inter is 213 KB of the total, so two of the three obvious
+growth sources are already spent.
