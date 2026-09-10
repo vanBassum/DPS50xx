@@ -479,6 +479,26 @@ class BackendService {
     return this.send("system reboot")
   }
 
+  async getPsu(): Promise<PsuData> {
+    return this.send<PsuData>("psu get")
+  }
+
+  /** Apply any subset of the setpoints in ONE command â€” the device leaves an
+   *  omitted field alone and skips the Modbus write for anything unchanged, so
+   *  there is no reason to split these into separate calls. Resolves with what
+   *  the supply holds afterwards; `ok: false` carries the Modbus error. */
+  async setPsu(changes: PsuSetpoints): Promise<PsuSetResult> {
+    return this.send<PsuSetResult>("psu set", changes)
+  }
+
+  /** Write ONE capability by name, validated on the device against that
+   *  capability's own range. This is how the long tail â€” protection thresholds
+   *  and whatever the next supply adds â€” is configured without this file
+   *  growing a method per register. */
+  async writePsu(key: string, value: number): Promise<PsuWriteResult> {
+    return this.send<PsuWriteResult>("psu write", { key, value })
+  }
+
   /** Returns false on wrong password; throws on connection failure. On success
    *  stores the session key and marks the connection authenticated. */
   async login(password: string): Promise<boolean> {
@@ -816,3 +836,129 @@ export interface PartitionsResponse {
   partitions: Partition[]
 }
 
+// â”€â”€ The supply â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+/** One capability of the supply: something it can do or report, already
+ *  normalized by its driver.
+ *
+ *  This is NOT a device register. An XY6020L keeps its runtime in three
+ *  registers and reports an unconnected probe as 8888; neither of those facts
+ *  reaches this file, because the driver turns storage into meaning before
+ *  anything gets here. So there is no PROTECTION_LABELS table, no "888.8 means
+ *  no sensor", and no h/m/s arithmetic in React â€” only `kind`, `group`, `unit`
+ *  and a value.
+ *
+ *  A capability this build has never heard of still renders: that is the point
+ *  of the schema travelling with the value. */
+export interface PsuCapability {
+  label: string
+  unit: string
+  /** How to read `value`: a measurement, a 0/1, a code with `options`, or a
+   *  whole number of SECONDS this side formats as HH:MM:SS. */
+  kind: "number" | "bool" | "enum" | "duration"
+  /** Which section of the UI it belongs to â€” the DRIVER decides, so this file
+   *  keeps no list of keys to sort them by. */
+  group: "core" | "session" | "protection" | "info"
+  value: number
+  /** Absent means present. False is the supply saying it has no value right
+   *  now â€” an unplugged probe, or registers that did not answer. */
+  available?: boolean
+  /** Enums only: the supply's own name for the code in `value`. */
+  valueLabel?: string
+  /** Enums only: every code's name, in order, so a selector can be drawn. */
+  options?: string[]
+  access: "r" | "rw"
+  /** Writable capabilities only, in the same units as `value`. The supply's own
+   *  limits â€” the browser no longer hardcodes 50 V and 20 A. */
+  min?: number
+  max?: number
+}
+
+export interface PsuData {
+  /** False when the supply missed enough consecutive polls to be declared gone
+   *  â€” the values are then the last ones successfully read. */
+  online: boolean
+  /** Keyed by capability name, in the driver's declaration order. */
+  capabilities: Record<string, PsuCapability>
+}
+
+/** The capabilities this UI addresses BY MEANING: it charts three, edits two,
+ *  toggles two, and names one in a status line. Everything else it renders from
+ *  `group` without knowing what it is. These are semantic names â€” no supply's
+ *  register map appears here. */
+export const PSU_KEYS = {
+  setVoltage: "setVoltage",
+  setCurrent: "setCurrent",
+  outputVoltage: "outputVoltage",
+  outputCurrent: "outputCurrent",
+  outputPower: "outputPower",
+  inputVoltage: "inputVoltage",
+  outputEnabled: "outputEnabled",
+  keyLock: "keyLock",
+  constantCurrent: "constantCurrent",
+  protectionState: "protectionState",
+  activePreset: "activePreset",
+} as const
+
+export function psuCapability(d: PsuData | null, key: string): PsuCapability | undefined {
+  return d?.capabilities?.[key]
+}
+
+export function psuNumber(d: PsuData | null, key: string, fallback = 0): number {
+  return psuCapability(d, key)?.value ?? fallback
+}
+
+export function psuFlag(d: PsuData | null, key: string): boolean {
+  return (psuCapability(d, key)?.value ?? 0) !== 0
+}
+
+/** Every capability in one group, in the order the driver declared them. This
+ *  is what replaced a hardcoded list of "extra" keys. */
+export function psuGroup(
+  d: PsuData | null,
+  group: PsuCapability["group"],
+): [string, PsuCapability][] {
+  return Object.entries(d?.capabilities ?? {}).filter(([, c]) => c.group === group)
+}
+
+/** True when the supply has a value for this right now. */
+export function psuAvailable(c: PsuCapability | undefined): boolean {
+  return c !== undefined && c.available !== false
+}
+
+/** Every field optional â€” the device leaves an omitted one alone.
+ *
+ *  A `type` and not an `interface` on purpose: `send` takes
+ *  Record<string, unknown>, and TypeScript only grants an implicit index
+ *  signature to an aliased object type. An interface here needs a cast at
+ *  every call site. */
+export type PsuSetpoints = {
+  voltage?: number
+  current?: number
+  output?: boolean
+  keyLock?: boolean
+  backlight?: number
+}
+
+/** What the supply holds after the write, echoed under CAPABILITY keys so it
+ *  folds straight back into what `psu get` gave. Every field optional because
+ *  the device echoes only what it actually has â€” a supply with no display to
+ *  light sends no `backlight`. */
+export interface PsuSetResult {
+  ok: boolean
+  /** Present only when ok is false: the Modbus error, or a rejected setpoint. */
+  error?: string
+  setVoltage?: number
+  setCurrent?: number
+  outputEnabled?: boolean
+  keyLock?: boolean
+  backlight?: number
+}
+
+/** Result of writing one capability by key. */
+export interface PsuWriteResult {
+  ok: boolean
+  error?: string
+  key?: string
+  value?: number
+}

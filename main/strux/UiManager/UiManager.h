@@ -4,6 +4,8 @@
 #include "InitState.h"
 #include "CommandEntry.h"
 #include "UiModule.h"
+#include "Setting.h"
+#include "TypedSettings.h"
 #include "Mutex.h"
 #include <initializer_list>
 
@@ -60,6 +62,26 @@ private:
     StruxProvider& strux_;
     InitState initState_;
     Mutex mutex_;
+
+    // Whether this device presents its UI as MODULES a shell hosts, or as a whole page
+    // a shell merely serves.
+    //
+    // Both are first-class and the relay supports both, so this is a per-PRODUCT
+    // choice rather than a fork of the framework. A product whose frontend is one
+    // self-contained app — its own navigation, its own component library, its own
+    // charts — sets this false: `ui modules` then answers with an empty array, which
+    // is already the documented "no modules, serve the device's whole page" path. The
+    // managers still register; nothing below has to know.
+    //
+    // Runtime rather than compile-time so one build can serve either shape, and so
+    // flipping it needs no reflash — which is also what makes the choice reversible.
+    //
+    // FORK-LOCAL: the default is false here and would be true upstream, because Strux
+    // ships four modules and DPS50xx ships none. That single token is the whole of
+    // this product's divergence from the framework's UI story — no manager stops
+    // registering, no file outside this one changes, and turning it back on is one
+    // setting away.
+    inline static BoolSetting modulesEnabled_{ "ui.modules", "Serve UI Modules", false };
 
     /// Intrusive chain, head-inserted — so modules report in reverse registration
     /// order, exactly as settings do. Nothing depends on the order; a shell keys on id.

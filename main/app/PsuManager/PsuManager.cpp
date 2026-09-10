@@ -30,7 +30,6 @@ void PsuManager::Init()
     StruxProvider& strux = app_.getStrux();
     strux.getSettingsManager().Register({ &pollIntervalMs_, &telemetry_ });
     strux.getCommandManager().Register(this, commands_);
-    strux.getUiManager().Register({ &uiModule_ });
 
     // The board already brought the UART host up — the bus is the board's, not
     // this manager's. All that is left is to start asking.

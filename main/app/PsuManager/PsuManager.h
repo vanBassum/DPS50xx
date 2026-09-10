@@ -4,7 +4,6 @@
 #include "InitState.h"
 #include "CommandEntry.h"
 #include "TypedSettings.h"
-#include "UiModule.h"
 #include "Task.h"
 #include "interfaces/Psu.h"
 
@@ -94,18 +93,9 @@ private:
     /// need a specific ORDER that a generic write cannot express.
     RequestError Cmd_Write(CommandContext& ctx);
 
-    // ── UI. The browser half of this manager is a self-contained ES module in
-    // `www`, which a shell imports on demand. What follows is only the
-    // *declaration* a shell reads first, so it can draw its navigation without
-    // loading a byte of module code — and the id is what the module's own
-    // activate() is matched against.
-    //
-    // One page, and it is the FIRST module this firmware registers: the app's
-    // managers Init() after the framework's, and UiManager head-inserts, so the
-    // supply lands ahead of console/settings/firmware. That ordering is how a
-    // device says which of its features is the product.
-    inline static const UiPage uiPages_[] = { { "psu", "Supply", "zap" } };
-    inline static UiModule uiModule_{ "psu", "/modules/psu.js", uiPages_ };
+    // No UI declaration here. The browser half of this product is the whole
+    // frontend in `www`, not a module a shell hosts, so a shell serves the page
+    // and asks nothing about its structure — see `ui.modules` in UiManager.
 
     inline static CommandEntry commands_[] = {
         { "psu", "get", &InvokeCommand<&PsuManager::Cmd_Get> },

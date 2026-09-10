@@ -1,5 +1,6 @@
 #include "UiManager.h"
 #include "CommandManager.h"
+#include "SettingsManager.h"
 #include "ContextLock.h"
 #include "esp_log.h"
 #include "esp_memory_utils.h"
@@ -20,6 +21,7 @@ void UiManager::Init()
         return;
     }
 
+    strux_.getSettingsManager().Register({ &modulesEnabled_ });
     strux_.getCommandManager().Register(this, commands_);
 
     initAttempt.SetReady();
@@ -98,6 +100,12 @@ RequestError UiManager::Cmd_Modules(CommandContext& ctx)
         api.field("min", HOST_API_MIN);
         api.field("max", HOST_API_MAX);
     }
+
+    // A product that serves its own whole page reports none, however many its managers
+    // registered. The walk is skipped rather than the registrations refused, so this
+    // stays one decision in one place and flipping the setting needs no reboot.
+    if (!modulesEnabled_.Get())
+        head = nullptr;
 
     auto modules = resp.array("modules");
     for (const UiModule* m = head; m; m = m->next)
