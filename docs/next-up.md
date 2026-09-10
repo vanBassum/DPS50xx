@@ -9,27 +9,27 @@ Last updated 2026-09-10.
 
 ## Now
 
-**The module/shell style boundary is a shadow root, and it is verified on the XY6020L.**
-The PSU module used to render differently in each shell because two Tailwind builds shared
-one cascade layer. It now renders inside its own shadow root and consumes the shell's
-tokens (`reasoning/2026-09-10-12h11`). Flashed to the C3 and confirmed in a real browser:
-host `display: contents`, one adopted sheet of 31 rules, status row `display: flex`, card
-border `oklch(0.922 0 0)` and radius 14px — the shell's `--border` and `--radius × 1.4`
-reaching in through the boundary. `OUTPUT OFF` is red again, which is what the module
-asks for and what the relay shell's own `.bg-primary` used to override.
+**The frontend is one SPA again, and modules are off.** The shell/module split was
+dropped on 2026-09-10: it cost ~2,000 lines of seam and bought this product nothing, and
+the relay serves a device's whole page just as happily. `ui.modules` (default false here,
+true upstream) gates the manifest in `UiManager`, so nothing in `strux/` stopped
+registering and turning it back on is a setting rather than a revert. See
+`reasoning/2026-09-10-17h24`. Baseline was `e1ca108`; the capability model, the shadcn b0
+preset, `DeviceInfoDialog`, `uploadSession`/`downloadSession` and `partition status` all
+came forward.
 
-Still unchecked: **dark mode**, and the relay-shell view since the reflash. Dark is the one
-path with no coverage — `ModuleRoot` mirrors the document's theme class onto the shadow
-host, and the device shell never sets `.dark`, so only the relay shell exercises it.
+**Not verified in a browser.** Both commits are a build and a typecheck only. What wants
+looking at on real hardware: the two-column dashboard at `lg` and collapsed below it, the
+charts in BOTH themes (their structural colours are theme variables, and dark has never
+been exercised on this page), and the same page served through the relay — that last one
+is the path the empty manifest actually changes.
 
-**Two hazards this uncovered, worth knowing before the next module change:**
+**Recharts is back at 3.10.1**, against code written for 2.15.4. It typechecks and the API
+it uses is unchanged across that major, but no chart has been rendered yet. If something
+looks wrong before anything else is suspected, pin `^2.15.4` and compare.
 
-- **A module bundle is built in Vite LIBRARY mode, which does not substitute
-  `process.env.NODE_ENV`.** Bundling a CommonJS dependency therefore ships a literal
-  `process` reference to the browser and every module dies at import with
-  `process is not defined` — which is how all four pages broke at once. `moduleConfig`
-  defines it now and `check-modules` fails the build on it. See
-  `reasoning/2026-09-10-14h06`.
+**One hazard worth knowing before the next board change:**
+
 - **The board is a build-time choice with no runtime witness.** Flashing the XY6020L with
   `-DBOARD=dps50xx_c3` builds, boots, joins the network and serves the UI — and reports the
   supply offline, indistinguishable from a wiring fault, because Modbus moves from 3/4 at
@@ -41,30 +41,22 @@ host, and the device shell never sets `.dark`, so only the relay shell exercises
 which the board defaults override and `ConsoleManager.cpp` refuses to build. Use the
 per-board pattern: `idf.py -DBOARD=xy6020_c3 -DSDKCONFIG=sdkconfig-xy6020 -B build-xy6020`.
 
-**Both shells are on shadcn preset `b0` now, and their token sets are provably equal** —
-103 tokens in both, zero differing values (the device shell has `--destructive-foreground`
-extra and no module names it). The relay was already on the preset; the device shell never
-had been, which is where the typeface and radius divergence came from. See
-`reasoning/2026-09-10-13h20`. Re-check with the token diff in that note after any future
-`shadcn apply`.
+**The device shell is on shadcn preset `b0`.** It never had been before 2026-09-10, which
+is where the typeface and radius divergence came from; see `reasoning/2026-09-10-13h20`.
+The relay's token set no longer has to match, since the relay now serves this page whole
+rather than hosting modules inside its own chrome.
 
-Three things it left:
+Two things it left:
 
 - **Inter costs 213 KB of `www` and 166 KB of that can never be served.** Seven
   `unicode-range`-gated subsets ship; only latin (47 KB) is ever requested by an English
-  UI, but flash holds all of them. `www` is now 392 KB of the 917 KB partition. The prune
-  is one import away and was NOT taken, because the next `shadcn apply` would silently undo
-  it. Take it if the partition gets tight.
+  UI, but flash holds all of them. The prune is one import away and was NOT taken, because
+  the next `shadcn apply` would silently undo it. Take it if the partition gets tight.
 - **The preset upgraded every shadcn component**, which brought `cn` (shadcn's own
-  clsx+tailwind-merge replacement, published four days ago) and `next-themes` into the
-  device shell. `next-themes` is only there because the current `sonner.tsx` imports
-  `useTheme`, and this shell has no theme provider — `useTheme()` outside one returns
-  undefined and the default `"system"` applies, so it works, but the dependency earns
-  nothing.
-- **`shell-contract/contract.ts`'s host-obligations comment is fork-local**, and belongs
-  upstream in Strux with `ArgType::Float`. The file is vendored FROM Strux, not owned here:
-  the relay hash-locks its copy against `vanBassum/Strux` and checks it over the network,
-  so editing the relay's copy broke its build and was reverted there.
+  clsx+tailwind-merge replacement) and `next-themes` into the shell. `next-themes` is only
+  there because the current `sonner.tsx` imports `useTheme`, and this shell has no theme
+  provider — `useTheme()` outside one returns undefined and the default `"system"` applies,
+  so it works, but the dependency earns nothing.
 
 **The XY6020L runs on hardware, on the capability model, updated over the air.** Flashed to the
 C3 at `E8:3D:C1:9C:1C:CC`, then twice updated by OTA with no cable attached. What the unit
@@ -190,7 +182,6 @@ from its front panel, so the firmware now refuses to reproduce a setpoint the pa
 allows. Either the cap is the product's rating and the asymmetry is intended, or it
 should follow what the register accepts. Not decided.
 
-**The `www` partition shrank to 0xE0000 (917 KB)** and the current bundle is 392 KB —
-253 KB before Inter arrived with the shadcn preset. Still plenty, but `recharts` is most
-of the uncompressed JS and Inter is 213 KB of the total, so two of the three obvious
-growth sources are already spent.
+**The `www` partition is 0xE0000 (917 KB) and the bundle is 482 KB** — 52.6% used,
+425 KB free. Recharts is 112 KB of that and Inter 213 KB, so the two obvious growth
+sources are both already spent.

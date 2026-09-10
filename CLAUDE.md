@@ -11,7 +11,7 @@ DPS50xx is ESP32 firmware (ESP-IDF v6.0, C++, FreeRTOS) that drives a DPS5020 be
 - [main/app/PsuManager/](main/app/PsuManager/) — polls the supply, owns `psu get` / `psu set`, registers `psu.poll` and `psu.telem`, records a telemetry point per poll.
 - [main/hardware/drivers/DPS5020.h](main/hardware/drivers/DPS5020.h) — the register map and the retry/offline logic.
 - [main/hardware/boards/](main/hardware/boards/) — `dps50xx_esp32` and `dps50xx_c3`, each owning its pins and binding the drivers.
-- [frontend/modules/psu/](frontend/modules/psu/) — the dashboard, shipped as a device-hosted UI module rather than a page in the shell. `PsuManager` declares it (`uiPages_`), so it is the page a shell lands on; see *Device-hosted UI modules*.
+- [frontend/src/pages/HomePage.tsx](frontend/src/pages/HomePage.tsx) — the dashboard: capability-driven readouts, setpoints and charts. The frontend is one ordinary SPA; see *The UI is a whole page, not modules*.
 
 Nothing in `strux/` is touched by any of that, which is the point: see the "Pulling from Strux" section below.
 
@@ -59,9 +59,8 @@ Frontend (React 19 + TypeScript + Vite + Tailwind + shadcn/ui, package manager i
 ```bash
 cd frontend
 pnpm dev          # hot-reload dev server, proxies WebSocket to a running device
-pnpm build        # shell + every module, then check-modules, then gzip into ../www
-pnpm build:modules  # just the module bundles (psu, console, settings, firmware)
-pnpm typecheck    # the shell AND every module (plain `tsc --noEmit` checks NOTHING:
+pnpm build        # tsc -b, vite build, then gzip into ../www
+pnpm typecheck    # tsc -b --force (plain `tsc --noEmit` checks NOTHING:
                   # the root tsconfig has files: [])
 ```
 
@@ -83,10 +82,9 @@ The frontend lives in its own `www` FAT partition and takes the same four steps 
 no-op for data). After a `www` write, read an asset back and compare it against the build output —
 nothing validates a filesystem image the way `esp_image` validates an app.
 
-`pnpm dev` gives HMR for the SHELL only. A module's bundle is whatever
-`pnpm build:modules` last produced, so editing one means rebuilding it — see the two dev
-middlewares in `frontend/vite.config.ts`, which exist because neither the import map's
-targets nor `www/modules/*.js.gz` are under the dev server's root.
+`pnpm dev` gives HMR for the whole UI — there is one bundle and one build, so every page
+is live. It proxies the WebSocket to a running device named by `frontend/src/config.ts`'s
+`DEV_HOST`.
 
 There are no automated tests; verification is building, flashing, and driving the device over its own wire:
 
@@ -183,59 +181,37 @@ uint32_t p = port_.Get();   // NVS value or the typed default
 
 **A key is at most 15 characters** — NVS's limit, asserted in `Register()` at *runtime*, so an over-long key compiles fine and then boot-loops the device on the assert. Nothing catches it earlier. `telemetry.enabled` (17) does not fit; `telem.enabled` does.
 
-### Device-hosted UI modules
+### The UI is a whole page, not modules
 
-**Neither shell contributes anything to a device's navigation.** Every page comes from
-the firmware's own manifest, and the first page it declares is the landing page — so
-this device decides both what its UI is and which part of it you arrive at. A shell is
-the frame, the router, the transport and the theme, and nothing else. This is Strux's
-design; what is specific here is that **the supply is the first module**, so a shell
-opens on the dashboard and `console`/`settings`/`firmware` follow it.
+**This product's frontend is one ordinary SPA** — `src/pages/` behind `AppSidebar` and a
+hash router, shadcn components, lucide icons, recharts. There is no shell/module split,
+no manifest the browser reads, no import map and no shared contract. A shell reached
+through the relay serves this page whole, exactly as the device's own HTTP server does.
 
-- **The manifest is a command, not a file.** `ui modules` ([UiManager](main/strux/UiManager/))
-  answers with `hostApi` plus the modules and their pages, so nothing about a module
-  travels over HTTP except the bundle itself.
-- **The manager that owns the commands owns the page.** A `UiModule` handed to
-  `UiManager::Register()` from the manager's own `Init()`, exactly like a command table
-  or a setting — [PsuManager](main/app/PsuManager/) declares `psu`, and the framework's
-  managers declare theirs. `UiManager` head-inserts and the app initialises after the
-  framework, which is why the product's page comes first.
-- **The module cannot import the shell.** It gets `ShellProvider` (`transport.request`,
-  `upload`, `download`, `logs`, `routes`, `ui`) and draws with
-  [frontend/modules/_ui/](frontend/modules/_ui/) — plain elements over the shells'
-  design tokens, because the device shell is radix-ui and the relay's is `@base-ui/react`.
-  **No icon library either**: the import map declares only React, so a lucide import
-  would be bundled and `scripts/check-modules.mjs` fails the build on any bare specifier
-  the map does not declare.
-- **A module renders inside its own shadow root** ([ModuleRoot.tsx](frontend/modules/_ui/ModuleRoot.tsx)),
-  which is what makes the same bundle look the same in every shell. The division is:
-  the **shell** owns the shadcn token set (`--background`, `--primary`, `--border`,
-  `--radius`, `--font-sans`, …), light/dark, and the navigation around the page; the
-  **module** owns its markup, components, layout, spacing and its own Tailwind build.
-  Tokens are the only thing that crosses, and they cross because custom properties
-  inherit through a shadow boundary. Practical consequences: a module must query its own
-  DOM through `getRootNode()` and never `document`, it must not write to
-  `document.head` (the build fails if it does), and `dark:` means the shell's dark —
-  `_ui/theme.css` binds it to `:host(.dark)`, which `ModuleRoot` mirrors from the
-  document. `docs/reasoning/2026-09-10-12h11` is why ordering the sheets could not have
-  worked.
-- **One React, via an import map.** Two React copies is the one thing that genuinely
-  breaks — every hook throws — so modules build `react`/`react/jsx-runtime` as external
-  and the shell publishes them at `assets/host-react.js`.
-- **Adding a module:** a folder under `frontend/modules/<id>/` whose `vite.config.ts` is
-  one call to `moduleConfig(import.meta.dirname, "<id>")`, a line in
-  `frontend/package.json`'s `build:modules` **and** `typecheck`, and a `UiModule`
-  registration in the manager that owns the feature.
-- **The full rationale is upstream's**, in Strux's own CLAUDE.md and its
-  `docs/reasoning/2026-09-09-21h50`+ notes. Two rules there are now obsolete and this
-  fork has moved past them: a module's `<style>` no longer goes in `<head>` at all, and
-  the ban on `hidden md:block` was a workaround for the shared cascade that the shadow
-  root removes. Both are fork-local until contributed back.
+That is a **product** choice, not a fork of the framework, and it is one setting:
 
-`www` now holds the shell plus four module bundles, and `CONFIG_LWIP_MAX_SOCKETS=16` in
-`sdkconfig.defaults` is load-bearing for it: the import map makes a page load four
-concurrent requests, and at IDF's default of 10 sockets `esp_http_server` is entitled to
-the whole budget and resets whichever connection loses the race.
+- **`ui.modules` gates the manifest**, in [UiManager](main/strux/UiManager/). Its default
+  is `false` here and would be `true` upstream, which is the entire divergence. Every
+  framework manager still registers its `UiModule`; `ui modules` simply reports an empty
+  array, and an empty array is **upstream's own documented fallback** — *no modules, serve
+  the device's whole page*. Nothing in `strux/` was deleted or stopped from registering.
+- **Turning it back on is a setting, not a revert.** `UiManager` is compiled in and the
+  module bundles are in git at `7cd431d`. If this device ever wants to be one of many in a
+  relay's own chrome, that is the path back.
+- **Why it was dropped:** the seam cost ~2,000 lines that existed only so a module and a
+  shell could coexist, and bought this product nothing — it pays off when one relay shell
+  hosts many heterogeneous products, and this repo is one supply with one page. Full
+  reasoning in `docs/reasoning/2026-09-10-17h24`; the design it steps away from is
+  `2026-09-09-23h10`, which is still right about what it was for.
+- **Consequences to keep in mind.** The relay opens a device as its own full-page app
+  rather than inside its navigation, and `hostApi` version negotiation does not apply to
+  this product. Both were accepted deliberately.
+
+`CONFIG_LWIP_MAX_SOCKETS=16` in `sdkconfig.defaults` stays, though the pressure that
+forced it is gone: a page load is two requests again rather than four, since there is one
+bundle and no import-map preloads. At IDF's default of 10 sockets `esp_http_server` is
+entitled to the whole budget and resets whichever connection loses a race, so the headroom
+is worth keeping — see `docs/reasoning/2026-09-10-00h10`.
 
 ### Deliberately out of scope
 
