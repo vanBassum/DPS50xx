@@ -22,6 +22,20 @@ export function moduleConfig(dir: string, id: string): UserConfig {
     // directory is what let the shell's classes leak into a module bundle.
     root: dir,
     plugins: [react(), tailwindcss()],
+    // Vite deliberately does NOT substitute this in LIBRARY mode, on the theory that a
+    // library might be consumed in Node — and a module bundle is built in library mode.
+    // So `react-dom`'s CJS entry, which _ui bundles for createPortal, shipped its
+    // literal `process.env.NODE_ENV === "production" ? … : …` switch to a browser that
+    // has no `process`. It threw at import, every module failed to activate, and the
+    // shell showed "could not be loaded: process is not defined" for all four pages.
+    // Nothing in the build said a word, because in library mode this is the documented
+    // behaviour rather than a mistake.
+    //
+    // Substituting it also drops react-dom's development build from the bundle, which is
+    // most of what bundling it cost.
+    define: {
+      "process.env.NODE_ENV": JSON.stringify("production"),
+    },
     resolve: {
       alias: {
         // Types only, and no imports of its own, so it can be vendored into the relay.

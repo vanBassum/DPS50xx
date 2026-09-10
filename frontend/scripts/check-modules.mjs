@@ -13,7 +13,11 @@
 //      Anything else is unresolvable in the browser.
 //   2. Every NAME a module imports from those specifiers is actually exported by the
 //      facade the import map points at.
-//   3. No module writes to the host document's <head>. A module's CSS belongs in its
+//   3. No module references `process`. A module runs in a browser, which has no
+//      `process` — but Vite does not substitute `process.env.NODE_ENV` in library mode,
+//      so a bundled CommonJS dependency ships its own environment switch and throws at
+//      import. That is how all four modules died at once with "process is not defined".
+//   4. No module writes to the host document's <head>. A module's CSS belongs in its
 //      own shadow root (modules/_ui/ModuleRoot.tsx); a stylesheet in the shared <head>
 //      puts two independent Tailwind builds in one cascade layer, and then whichever
 //      sheet came last decides the look. That failed in both directions before it was
@@ -106,6 +110,12 @@ for (const file of entries) {
   if (!/export\s*\{[^}]*\bactivate\b|export\s+(?:const|function)\s+activate\b/.test(src))
     problems.push(`modules/${file} does not export activate()`)
 
+  if (/\bprocess\s*\.\s*env\b/.test(src))
+    problems.push(
+      `modules/${file} references process.env, which does not exist in a browser — ` +
+        `Vite leaves it alone in library mode, so define it in _ui/vite-module.ts`,
+    )
+
   // Matches the property access however it is spelled after minification: esbuild
   // keeps `document.head` as written, and `document["head"]` is the only alternative.
   if (/document\s*(?:\.\s*head\b|\[\s*["']head["']\s*\])/.test(src))
@@ -145,5 +155,5 @@ if (problems.length) {
 console.log(
   `check-modules: ${entries.length} module bundle(s) OK — ` +
     `every bare import is declared by the import map and exported by its facade, ` +
-    `and none touches the shell's <head>`,
+    `and none references process or the shell's <head>`,
 )

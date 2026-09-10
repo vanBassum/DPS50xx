@@ -9,15 +9,37 @@ Last updated 2026-09-10.
 
 ## Now
 
-**The module/shell style boundary is now a shadow root, and the three renderings have not
-been compared on hardware.** The PSU module rendered differently in the relay shell, on the
-device page through the relay, and on the device — because two Tailwind builds shared one
-cascade layer, so whichever sheet came later won and the two shells do not emit the same
-class set. A module now renders inside its own shadow root and consumes the shell's tokens;
-see `reasoning/2026-09-10-12h11`. Built and typechecked, NOT yet flashed and looked at,
-which is the only verification that counts here. Check in all three: the status row is one
-flex row, the session grid is three columns above `sm`, the setpoint rows are spaced, and
-dark mode follows the shell rather than the OS.
+**The module/shell style boundary is a shadow root, and it is verified on the XY6020L.**
+The PSU module used to render differently in each shell because two Tailwind builds shared
+one cascade layer. It now renders inside its own shadow root and consumes the shell's
+tokens (`reasoning/2026-09-10-12h11`). Flashed to the C3 and confirmed in a real browser:
+host `display: contents`, one adopted sheet of 31 rules, status row `display: flex`, card
+border `oklch(0.922 0 0)` and radius 14px — the shell's `--border` and `--radius × 1.4`
+reaching in through the boundary. `OUTPUT OFF` is red again, which is what the module
+asks for and what the relay shell's own `.bg-primary` used to override.
+
+Still unchecked: **dark mode**, and the relay-shell view since the reflash. Dark is the one
+path with no coverage — `ModuleRoot` mirrors the document's theme class onto the shadow
+host, and the device shell never sets `.dark`, so only the relay shell exercises it.
+
+**Two hazards this uncovered, worth knowing before the next module change:**
+
+- **A module bundle is built in Vite LIBRARY mode, which does not substitute
+  `process.env.NODE_ENV`.** Bundling a CommonJS dependency therefore ships a literal
+  `process` reference to the browser and every module dies at import with
+  `process is not defined` — which is how all four pages broke at once. `moduleConfig`
+  defines it now and `check-modules` fails the build on it. See
+  `reasoning/2026-09-10-14h06`.
+- **The board is a build-time choice with no runtime witness.** Flashing the XY6020L with
+  `-DBOARD=dps50xx_c3` builds, boots, joins the network and serves the UI — and reports the
+  supply offline, indistinguishable from a wiring fault, because Modbus moves from 3/4 at
+  115200 to 6/5 at 9600. Adding `board` to `system info` would make a mis-flash obvious;
+  the compile already defines `BOARD_XY6020_C3`. Not done.
+
+**The XY6020L is flashed from `sdkconfig-xy6020` / `build-xy6020`.** The checked-out root
+`sdkconfig` is stale for it — it is esp32c3 but with USB Serial/JTAG as the PRIMARY console,
+which the board defaults override and `ConsoleManager.cpp` refuses to build. Use the
+per-board pattern: `idf.py -DBOARD=xy6020_c3 -DSDKCONFIG=sdkconfig-xy6020 -B build-xy6020`.
 
 **Both shells are on shadcn preset `b0` now, and their token sets are provably equal** —
 103 tokens in both, zero differing values (the device shell has `--destructive-foreground`
