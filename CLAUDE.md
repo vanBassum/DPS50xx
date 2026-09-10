@@ -207,6 +207,18 @@ opens on the dashboard and `console`/`settings`/`firmware` follow it.
   **No icon library either**: the import map declares only React, so a lucide import
   would be bundled and `scripts/check-modules.mjs` fails the build on any bare specifier
   the map does not declare.
+- **A module renders inside its own shadow root** ([ModuleRoot.tsx](frontend/modules/_ui/ModuleRoot.tsx)),
+  which is what makes the same bundle look the same in every shell. The division is:
+  the **shell** owns the shadcn token set (`--background`, `--primary`, `--border`,
+  `--radius`, `--font-sans`, …), light/dark, and the navigation around the page; the
+  **module** owns its markup, components, layout, spacing and its own Tailwind build.
+  Tokens are the only thing that crosses, and they cross because custom properties
+  inherit through a shadow boundary. Practical consequences: a module must query its own
+  DOM through `getRootNode()` and never `document`, it must not write to
+  `document.head` (the build fails if it does), and `dark:` means the shell's dark —
+  `_ui/theme.css` binds it to `:host(.dark)`, which `ModuleRoot` mirrors from the
+  document. `docs/reasoning/2026-09-10-12h11` is why ordering the sheets could not have
+  worked.
 - **One React, via an import map.** Two React copies is the one thing that genuinely
   breaks — every hook throws — so modules build `react`/`react/jsx-runtime` as external
   and the shell publishes them at `assets/host-react.js`.
@@ -215,8 +227,10 @@ opens on the dashboard and `console`/`settings`/`firmware` follow it.
   `frontend/package.json`'s `build:modules` **and** `typecheck`, and a `UiModule`
   registration in the manager that owns the feature.
 - **The full rationale is upstream's**, in Strux's own CLAUDE.md and its
-  `docs/reasoning/2026-09-09-21h50`+ notes — including why a module's `<style>` goes
-  FIRST in `<head>` and why a module must not write `hidden md:block`.
+  `docs/reasoning/2026-09-09-21h50`+ notes. Two rules there are now obsolete and this
+  fork has moved past them: a module's `<style>` no longer goes in `<head>` at all, and
+  the ban on `hidden md:block` was a workaround for the shared cascade that the shadow
+  root removes. Both are fork-local until contributed back.
 
 `www` now holds the shell plus four module bundles, and `CONFIG_LWIP_MAX_SOCKETS=16` in
 `sdkconfig.defaults` is load-bearing for it: the import map makes a page load four

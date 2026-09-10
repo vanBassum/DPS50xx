@@ -4,10 +4,16 @@
 
 import css from "./index.css?inline"
 import type { ActivateFn } from "@shell/contract"
-import { adoptStyles } from "../../_ui/activate"
+import { ModuleRoot } from "../../_ui"
 import { SettingsPage } from "./SettingsPage"
 
 export const activate: ActivateFn = (shell) => {
-  adoptStyles("settings", css)
-  shell.routes.register({ id: "settings", render: () => <SettingsPage shell={shell} /> })
+  shell.routes.register({
+    id: "settings",
+    render: () => (
+      <ModuleRoot css={css}>
+        <SettingsPage shell={shell} />
+      </ModuleRoot>
+    ),
+  })
 }

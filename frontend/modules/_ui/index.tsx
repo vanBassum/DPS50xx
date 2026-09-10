@@ -26,6 +26,10 @@ import {
   type InputHTMLAttributes,
 } from "react"
 
+// The shadow-root boundary a module renders inside. Re-exported here so a module
+// entry point imports one thing from one place.
+export { ModuleRoot } from "./ModuleRoot"
+
 function cx(...parts: (string | false | null | undefined)[]): string {
   return parts.filter(Boolean).join(" ")
 }

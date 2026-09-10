@@ -9,10 +9,16 @@
 
 import css from "./index.css?inline"
 import type { ActivateFn } from "@shell/contract"
-import { adoptStyles } from "../../_ui/activate"
+import { ModuleRoot } from "../../_ui"
 import { ConsolePage } from "./ConsolePage"
 
 export const activate: ActivateFn = (shell) => {
-  adoptStyles("console", css)
-  shell.routes.register({ id: "console", render: () => <ConsolePage shell={shell} /> })
+  shell.routes.register({
+    id: "console",
+    render: () => (
+      <ModuleRoot css={css}>
+        <ConsolePage shell={shell} />
+      </ModuleRoot>
+    ),
+  })
 }

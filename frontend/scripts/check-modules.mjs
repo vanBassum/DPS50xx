@@ -7,12 +7,19 @@
 // and nothing in the build said a word. React is CommonJS, so a star re-export has no
 // statically known names to forward.
 //
-// So this checks the two things that can silently break the seam:
+// So this checks the three things that can silently break the seam:
 //
 //   1. Every bare specifier a module imports is one the shell's import map declares.
 //      Anything else is unresolvable in the browser.
 //   2. Every NAME a module imports from those specifiers is actually exported by the
 //      facade the import map points at.
+//   3. No module writes to the host document's <head>. A module's CSS belongs in its
+//      own shadow root (modules/_ui/ModuleRoot.tsx); a stylesheet in the shared <head>
+//      puts two independent Tailwind builds in one cascade layer, and then whichever
+//      sheet came last decides the look. That failed in both directions before it was
+//      closed — a module's `.hidden` deleted the shell's sidebar, and a shell's
+//      `.grid-cols-2` overrode a module's `sm:grid-cols-3` — so it is worth a build
+//      error rather than a convention.
 //
 // Run after the module build and before gzip, so it reads plain .js.
 
@@ -99,6 +106,14 @@ for (const file of entries) {
   if (!/export\s*\{[^}]*\bactivate\b|export\s+(?:const|function)\s+activate\b/.test(src))
     problems.push(`modules/${file} does not export activate()`)
 
+  // Matches the property access however it is spelled after minification: esbuild
+  // keeps `document.head` as written, and `document["head"]` is the only alternative.
+  if (/document\s*(?:\.\s*head\b|\[\s*["']head["']\s*\])/.test(src))
+    problems.push(
+      `modules/${file} touches document.head — a module's styles belong in its own ` +
+        `shadow root (see modules/_ui/ModuleRoot.tsx), not in the shell's cascade`,
+    )
+
   for (const [spec, names] of importsBySpecifier(src)) {
     const facade = facades.get(spec)
     if (!facade) {
@@ -129,5 +144,6 @@ if (problems.length) {
 
 console.log(
   `check-modules: ${entries.length} module bundle(s) OK — ` +
-    `every bare import is declared by the import map and exported by its facade`,
+    `every bare import is declared by the import map and exported by its facade, ` +
+    `and none touches the shell's <head>`,
 )

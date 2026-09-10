@@ -7,10 +7,16 @@
 
 import css from "./index.css?inline"
 import type { ActivateFn } from "@shell/contract"
-import { adoptStyles } from "../../_ui/activate"
+import { ModuleRoot } from "../../_ui"
 import { FirmwarePage } from "./FirmwarePage"
 
 export const activate: ActivateFn = (shell) => {
-  adoptStyles("firmware", css)
-  shell.routes.register({ id: "firmware", render: () => <FirmwarePage shell={shell} /> })
+  shell.routes.register({
+    id: "firmware",
+    render: () => (
+      <ModuleRoot css={css}>
+        <FirmwarePage shell={shell} />
+      </ModuleRoot>
+    ),
+  })
 }

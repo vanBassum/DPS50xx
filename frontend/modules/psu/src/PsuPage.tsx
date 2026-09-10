@@ -50,14 +50,18 @@ export function PsuPage({ shell }: { shell: ShellProvider }) {
       </div>
 
       {!data && (
-        <Panel className="text-muted-foreground p-8 text-center">
-          Reading the supply…
+        <Panel flush>
+          <div className="text-muted-foreground p-8 text-center">
+            Reading the supply…
+          </div>
         </Panel>
       )}
 
       {data && !data.online && (
-        <Panel className="p-8 text-center text-amber-600 dark:text-amber-500">
-          Supply not responding on Modbus. Check wiring and power.
+        <Panel flush>
+          <div className="p-8 text-center text-amber-600 dark:text-amber-500">
+            Supply not responding on Modbus. Check wiring and power.
+          </div>
         </Panel>
       )}
 
@@ -77,57 +81,61 @@ export function PsuPage({ shell }: { shell: ShellProvider }) {
           </div>
 
           {/* Status bar */}
-          <Panel className="flex items-center justify-between px-4 py-2.5">
-            <StatusItem label="Input" value={`${psuNumber(data, PSU_KEYS.inputVoltage).toFixed(1)}V`} />
-            <Divider />
-            <StatusItem
-              label="Mode"
-              value={psuFlag(data, PSU_KEYS.constantCurrent) ? "CC" : "CV"}
-              highlight={psuFlag(data, PSU_KEYS.constantCurrent)}
-            />
-            <Divider />
-            {/* The supply names its own protection codes, so there is no label table
-                on this side to fall out of date. This is the current TRIP STATE — the
-                configured thresholds are behind Protections. */}
-            <StatusItem
-              label="Protection"
-              value={psuCapability(data, PSU_KEYS.protectionState)?.valueLabel ?? "?"}
-              highlight={psuNumber(data, PSU_KEYS.protectionState) !== 0}
-            />
+          <Panel flush>
+            <div className="flex items-center justify-between px-4 py-2.5">
+              <StatusItem label="Input" value={`${psuNumber(data, PSU_KEYS.inputVoltage).toFixed(1)}V`} />
+              <Divider />
+              <StatusItem
+                label="Mode"
+                value={psuFlag(data, PSU_KEYS.constantCurrent) ? "CC" : "CV"}
+                highlight={psuFlag(data, PSU_KEYS.constantCurrent)}
+              />
+              <Divider />
+              {/* The supply names its own protection codes, so there is no label table
+                  on this side to fall out of date. This is the current TRIP STATE — the
+                  configured thresholds are behind Protections. */}
+              <StatusItem
+                label="Protection"
+                value={psuCapability(data, PSU_KEYS.protectionState)?.valueLabel ?? "?"}
+                highlight={psuNumber(data, PSU_KEYS.protectionState) !== 0}
+              />
+            </div>
           </Panel>
 
           {/* Controls */}
-          <Panel className="space-y-5 p-6">
-            <SetpointRow capability={psuCapability(data, PSU_KEYS.setVoltage)} onSet={setVoltage} />
-            <SetpointRow capability={psuCapability(data, PSU_KEYS.setCurrent)} onSet={setCurrent} />
+          <Panel flush>
+            <div className="space-y-5 p-6">
+              <SetpointRow capability={psuCapability(data, PSU_KEYS.setVoltage)} onSet={setVoltage} />
+              <SetpointRow capability={psuCapability(data, PSU_KEYS.setCurrent)} onSet={setCurrent} />
 
-            <div className="flex items-center gap-3 pt-2">
-              <Button
-                className={`h-12 flex-1 text-base font-bold ${
-                  psuFlag(data, PSU_KEYS.outputEnabled)
-                    ? "bg-emerald-600 text-white hover:bg-emerald-700"
-                    : "bg-red-600 text-white hover:bg-red-700"
-                }`}
-                onClick={() => setOutput(!psuFlag(data, PSU_KEYS.outputEnabled))}
-              >
-                {psuFlag(data, PSU_KEYS.outputEnabled) ? "OUTPUT ON" : "OUTPUT OFF"}
-              </Button>
-
-              {psuCapability(data, PSU_KEYS.keyLock) && (
+              <div className="flex items-center gap-3 pt-2">
                 <Button
-                  variant="outline"
-                  className="h-12 w-24 shrink-0"
-                  onClick={() => setKeyLock(!psuFlag(data, PSU_KEYS.keyLock))}
-                  title={psuFlag(data, PSU_KEYS.keyLock) ? "Unlock the panel keys" : "Lock the panel keys"}
+                  className={`h-12 flex-1 text-base font-bold ${
+                    psuFlag(data, PSU_KEYS.outputEnabled)
+                      ? "bg-emerald-600 text-white hover:bg-emerald-700"
+                      : "bg-red-600 text-white hover:bg-red-700"
+                  }`}
+                  onClick={() => setOutput(!psuFlag(data, PSU_KEYS.outputEnabled))}
                 >
-                  {psuFlag(data, PSU_KEYS.keyLock) ? "Locked" : "Unlocked"}
+                  {psuFlag(data, PSU_KEYS.outputEnabled) ? "OUTPUT ON" : "OUTPUT OFF"}
                 </Button>
-              )}
-            </div>
 
-            <div className="border-border flex items-center justify-between gap-3 border-t pt-4">
-              <PresetSelect capability={psuCapability(data, PSU_KEYS.activePreset)} />
-              <Protections data={data} write={write} />
+                {psuCapability(data, PSU_KEYS.keyLock) && (
+                  <Button
+                    variant="outline"
+                    className="h-12 w-24 shrink-0"
+                    onClick={() => setKeyLock(!psuFlag(data, PSU_KEYS.keyLock))}
+                    title={psuFlag(data, PSU_KEYS.keyLock) ? "Unlock the panel keys" : "Lock the panel keys"}
+                  >
+                    {psuFlag(data, PSU_KEYS.keyLock) ? "Locked" : "Unlocked"}
+                  </Button>
+                )}
+              </div>
+
+              <div className="border-border flex items-center justify-between gap-3 border-t pt-4">
+                <PresetSelect capability={psuCapability(data, PSU_KEYS.activePreset)} />
+                <Protections data={data} write={write} />
+              </div>
             </div>
           </Panel>
 
@@ -297,12 +305,14 @@ function ProtectionRow({
 
 function Readout({ label, value, unit }: { label: string; value?: number; unit: string }) {
   return (
-    <Panel className="p-4 text-center">
-      <div className="text-3xl font-bold tabular-nums">
-        {value !== undefined ? value.toFixed(2) : "--.-"}
-      </div>
-      <div className="text-muted-foreground mt-1 text-xs">
-        {label} ({unit})
+    <Panel flush>
+      <div className="p-4 text-center">
+        <div className="text-3xl font-bold tabular-nums">
+          {value !== undefined ? value.toFixed(2) : "--.-"}
+        </div>
+        <div className="text-muted-foreground mt-1 text-xs">
+          {label} ({unit})
+        </div>
       </div>
     </Panel>
   )

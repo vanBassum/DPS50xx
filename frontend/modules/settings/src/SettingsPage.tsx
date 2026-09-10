@@ -367,11 +367,13 @@ export function SettingsPage({ shell }: { shell: ShellProvider }) {
       {/* Sections, in the order they are rendered. Built from the same `groups`
           the page renders, so it cannot list a section that is not there — and it
           follows the filter, which is why it is not a static list of prefixes. */}
-      {/* `max-lg:hidden`, NOT `hidden lg:block`. A module's stylesheet is adopted
-          ahead of the shell's so it loses every tie (see _ui/activate.ts), which
-          means the shell's plain `.hidden` outranks a module's `.lg:block` and an
-          element written that way is hidden at EVERY width. One utility carrying
-          its own media query has nothing to be overridden by. */}
+      {/* One utility that carries its own media query, rather than a base utility
+          plus a breakpoint override. That WAS a workaround — the module's sheet used
+          to share the shell's cascade layer and lose every tie, so a shell's plain
+          display-none outranked a module's breakpoint rule and the aside was hidden
+          at every width. The shadow root has since made that impossible
+          (_ui/ModuleRoot.tsx), so this is now a preference rather than a fix, and it
+          is still the clearer way to say it. */}
       <aside className="sticky top-0 w-48 shrink-0 max-lg:hidden">
         <p className="text-muted-foreground mb-3 px-3 text-xs font-semibold tracking-wider uppercase">
           On this page
@@ -382,8 +384,13 @@ export function SettingsPage({ shell }: { shell: ShellProvider }) {
               key={group.prefix}
               type="button"
               className="text-muted-foreground hover:bg-muted hover:text-foreground block w-full truncate rounded-md px-3 py-1.5 text-left text-sm transition-colors"
-              onClick={() =>
-                document
+              // `getRootNode()`, not `document`: this page renders inside a shadow
+              // root, so the section's id is not in the document's id map and
+              // document.getElementById would find nothing. The root node is the
+              // module's own shadow root, which is the correct scope for a module
+              // looking up its own DOM anyway.
+              onClick={(event) =>
+                (event.currentTarget.getRootNode() as ShadowRoot | Document)
                   .getElementById(`settings-${group.prefix}`)
                   ?.scrollIntoView({ behavior: "smooth", block: "start" })
               }

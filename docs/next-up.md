@@ -5,9 +5,29 @@ lands or is dropped — never ticked off in place. Everything else lives in
 `docs/backlog/` (work for later) or `docs/reasoning/` (why things are the way they are).
 If a fact wants to survive, it does not belong in this file.
 
-Last updated 2026-09-09.
+Last updated 2026-09-10.
 
 ## Now
+
+**The module/shell style boundary is now a shadow root, and the three renderings have not
+been compared on hardware.** The PSU module rendered differently in the relay shell, on the
+device page through the relay, and on the device — because two Tailwind builds shared one
+cascade layer, so whichever sheet came later won and the two shells do not emit the same
+class set. A module now renders inside its own shadow root and consumes the shell's tokens;
+see `reasoning/2026-09-10-12h11`. Built and typechecked, NOT yet flashed and looked at,
+which is the only verification that counts here. Check in all three: the status row is one
+flex row, the session grid is three columns above `sm`, the setpoint rows are spaced, and
+dark mode follows the shell rather than the OS.
+
+Two loose ends from it:
+
+- **The device shell publishes no `--font-mono` and a different `--font-sans`** (system-ui)
+  from the relay's Inter, so the module's typeface still differs between hosts. That is now
+  the shell's choice rather than a cascade accident; if they are meant to match, match the
+  token — the cost is a font file in the `www` partition.
+- **`shell-contract/contract.ts` gained the host-obligations comment** and the relay's
+  vendored copy was updated in step (`C:\Workspace\strux-relay`, comment only, uncommitted
+  there). CI compares the two, so they must land together.
 
 **The XY6020L runs on hardware, on the capability model, updated over the air.** Flashed to the
 C3 at `E8:3D:C1:9C:1C:CC`, then twice updated by OTA with no cable attached. What the unit

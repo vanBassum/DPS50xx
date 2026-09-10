@@ -8,12 +8,10 @@
 
 import css from "./index.css?inline"
 import type { ActivateFn } from "@shell/contract"
-import { adoptStyles } from "../../_ui/activate"
+import { ModuleRoot } from "../../_ui"
 import { PsuPage } from "./PsuPage"
 
 export const activate: ActivateFn = (shell) => {
-  adoptStyles("psu", css)
-
   // The id must match what the firmware declared in `ui modules`. The shell checks
   // that and IGNORES anything undeclared — registering a page the manifest does not
   // name would make navigation depend on running module code, which is the property
@@ -21,6 +19,10 @@ export const activate: ActivateFn = (shell) => {
   // it is the same string.
   shell.routes.register({
     id: "psu",
-    render: () => <PsuPage shell={shell} />,
+    render: () => (
+      <ModuleRoot css={css}>
+        <PsuPage shell={shell} />
+      </ModuleRoot>
+    ),
   })
 }
