@@ -1,11 +1,29 @@
 import { useEffect, useState, useCallback, useRef } from "react"
 import {
   backend,
+  psuNumber,
+  PSU_KEYS,
   type PsuData,
   type PsuSetResult,
   type PsuSetpoints,
 } from "@/lib/backend"
 import { useConnectionStatus } from "@/hooks/use-connection-status"
+
+export interface HistoryPoint {
+  time: string
+  voltage: number
+  current: number
+  power: number
+}
+
+/** 5 minutes at the default 1 s poll. History is client-side and deliberately
+ *  not persisted — the device's own telemetry (psu.telem) is what survives a
+ *  reload, and it goes to InfluxDB through the relay.
+ *
+ *  Sampled by CAPABILITY key, so a supply that reports these under the same
+ *  meanings charts without this file knowing which registers they came from. A
+ *  supply missing one of them charts it as zero rather than breaking the trace. */
+const MAX_HISTORY = 300
 
 /** The keys `psu set` echoes back. Named here rather than derived, because the
  *  echo is a promise about specific setpoints and not a schema. */
@@ -32,6 +50,7 @@ function applyEcho(prev: PsuData, res: PsuSetResult): PsuData {
 export function usePsu(pollIntervalMs = 1000) {
   const connection = useConnectionStatus()
   const [data, setData] = useState<PsuData | null>(null)
+  const [history, setHistory] = useState<HistoryPoint[]>([])
   const [error, setError] = useState<string | null>(null)
 
   // A reply can land after unmount — a command in flight is not cancellable — so
@@ -53,8 +72,31 @@ export function usePsu(pollIntervalMs = 1000) {
     if (inFlight.current) return
     inFlight.current = true
     try {
-      const next = await backend.getPsu()
-      if (alive.current) setData(next)
+      const d = await backend.getPsu()
+      if (!alive.current) return
+      setData(d)
+
+      // Only while the supply is answering: a gap in the trace is the honest
+      // picture of an offline supply, and carrying the last value forward would
+      // draw a flat line that looks like a real measurement.
+      if (d.online) {
+        setHistory((prev) => {
+          const next = [
+            ...prev,
+            {
+              time: new Date().toLocaleTimeString([], {
+                hour: "2-digit",
+                minute: "2-digit",
+                second: "2-digit",
+              }),
+              voltage: psuNumber(d, PSU_KEYS.outputVoltage),
+              current: psuNumber(d, PSU_KEYS.outputCurrent),
+              power: psuNumber(d, PSU_KEYS.outputPower),
+            },
+          ]
+          return next.length > MAX_HISTORY ? next.slice(-MAX_HISTORY) : next
+        })
+      }
     } catch {
       /* a dropped poll is not worth surfacing — the connection dot already says */
     } finally {
@@ -65,6 +107,7 @@ export function usePsu(pollIntervalMs = 1000) {
   useEffect(() => {
     if (connection !== "connected") {
       setData(null)
+      setHistory([])
       return
     }
 
@@ -109,5 +152,5 @@ export function usePsu(pollIntervalMs = 1000) {
     [refresh],
   )
 
-  return { data, error, apply, write, setVoltage, setCurrent, setOutput, setKeyLock, refresh }
+  return { data, history, error, apply, write, setVoltage, setCurrent, setOutput, setKeyLock, refresh }
 }

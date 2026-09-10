@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { usePsu } from "@/hooks/use-psu"
+import { usePsu, type HistoryPoint } from "@/hooks/use-psu"
 import {
   psuAvailable,
   psuCapability,
@@ -21,15 +21,31 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import { PowerIcon, ZapIcon, LockIcon, UnlockIcon, ShieldIcon } from "lucide-react"
+import {
+  CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
+  ReferenceLine,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts"
 
 // This page consumes CAPABILITIES, never registers. It addresses a handful by
 // meaning (PSU_KEYS: what it reads out, edits and toggles) and renders the rest
 // from the `group` and `kind` the driver sent — so a supply with values this
 // build has never heard of still displays, and nothing here knows that an
 // XY6020L keeps its runtime in three registers or calls an absent probe 8888.
+//
+// Two columns, because the numbers and their history are one reading: what the
+// supply is doing right now belongs beside where it has been, not a scroll away.
+// It collapses to one column below `lg`, where the charts go under the controls.
 
 export default function HomePage() {
-  const { data, error, write, setVoltage, setCurrent, setOutput, setKeyLock } = usePsu()
+  const { data, history, error, write, setVoltage, setCurrent, setOutput, setKeyLock } =
+    usePsu()
 
   return (
     <div className="space-y-6">
@@ -70,7 +86,9 @@ export default function HomePage() {
       )}
 
       {data?.online && (
-        <div className="mx-auto max-w-2xl space-y-4">
+        <div className="grid gap-6 lg:grid-cols-[1fr_1fr]">
+          {/* Left column: readouts, status, controls, session */}
+          <div className="space-y-4">
           {/* Live readouts */}
           <div className="grid grid-cols-3 gap-3">
             <ReadoutCard label="Voltage" value={psuNumber(data, PSU_KEYS.outputVoltage)} unit="V" color="text-yellow-500" />
@@ -140,8 +158,151 @@ export default function HomePage() {
           </div>
 
           <SessionCard data={data} />
+          </div>
+
+          {/* Right column: the same three readings over time. Nothing renders
+              until there are two points, because one point is not a trace. */}
+          {history.length > 1 && (
+            <div className="space-y-4">
+              <VoltageCurrentChart
+                history={history}
+                setVoltage={psuNumber(data, PSU_KEYS.setVoltage)}
+                setCurrent={psuNumber(data, PSU_KEYS.setCurrent)}
+              />
+              <PowerChart history={history} />
+            </div>
+          )}
         </div>
       )}
+    </div>
+  )
+}
+
+// ── Charts ───────────────────────────────────────────────────
+
+// Series colours stay literal — a trace's colour is its identity, and these
+// match the readout cards above. Everything structural (grid, ticks, tooltip)
+// comes from the theme's CSS variables so the charts follow light/dark with the
+// rest of the shell instead of being pinned to the old dark-only palette.
+const VOLTAGE_COLOR = "#eab308"
+const CURRENT_COLOR = "#06b6d4"
+const POWER_COLOR = "#f97316"
+
+const chartStyle = {
+  grid: "var(--border)",
+  tooltip: {
+    backgroundColor: "var(--card)",
+    border: "1px solid var(--border)",
+    borderRadius: 6,
+    color: "var(--card-foreground)",
+  },
+  tick: { fill: "var(--muted-foreground)", fontSize: 11 },
+  label: { color: "var(--muted-foreground)" },
+}
+
+function VoltageCurrentChart({
+  history,
+  setVoltage,
+  setCurrent,
+}: {
+  history: HistoryPoint[]
+  setVoltage: number
+  setCurrent: number
+}) {
+  return (
+    <div className="rounded-xl border bg-card p-4 shadow-sm">
+      <div className="mb-2 text-xs font-medium text-muted-foreground">Voltage &amp; Current</div>
+      <ResponsiveContainer width="100%" height={220}>
+        <LineChart data={history}>
+          <CartesianGrid strokeDasharray="3 3" stroke={chartStyle.grid} />
+          <XAxis dataKey="time" tick={chartStyle.tick} interval="preserveStartEnd" minTickGap={60} />
+          <YAxis
+            yAxisId="v"
+            tick={chartStyle.tick}
+            width={40}
+            domain={[0, "auto"]}
+            label={{ value: "V", position: "insideTopLeft", fill: VOLTAGE_COLOR, fontSize: 11, dy: -10 }}
+          />
+          <YAxis
+            yAxisId="a"
+            orientation="right"
+            tick={chartStyle.tick}
+            width={40}
+            domain={[0, "auto"]}
+            label={{ value: "A", position: "insideTopRight", fill: CURRENT_COLOR, fontSize: 11, dy: -10 }}
+          />
+          <Tooltip contentStyle={chartStyle.tooltip} labelStyle={chartStyle.label} />
+          <Legend />
+          {/* The setpoints as dashed references: how far the output is from what
+              was asked for should be readable without comparing two numbers. */}
+          <ReferenceLine
+            yAxisId="v"
+            y={setVoltage}
+            stroke={VOLTAGE_COLOR}
+            strokeDasharray="6 3"
+            strokeOpacity={0.5}
+            label={{ value: `${setVoltage.toFixed(1)}V`, fill: VOLTAGE_COLOR, fontSize: 10, position: "left" }}
+          />
+          <ReferenceLine
+            yAxisId="a"
+            y={setCurrent}
+            stroke={CURRENT_COLOR}
+            strokeDasharray="6 3"
+            strokeOpacity={0.5}
+            label={{ value: `${setCurrent.toFixed(1)}A`, fill: CURRENT_COLOR, fontSize: 10, position: "right" }}
+          />
+          <Line
+            yAxisId="v"
+            type="monotone"
+            dataKey="voltage"
+            name="Voltage"
+            stroke={VOLTAGE_COLOR}
+            strokeWidth={2}
+            dot={false}
+            isAnimationActive={false}
+          />
+          <Line
+            yAxisId="a"
+            type="monotone"
+            dataKey="current"
+            name="Current"
+            stroke={CURRENT_COLOR}
+            strokeWidth={2}
+            dot={false}
+            isAnimationActive={false}
+          />
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  )
+}
+
+function PowerChart({ history }: { history: HistoryPoint[] }) {
+  return (
+    <div className="rounded-xl border bg-card p-4 shadow-sm">
+      <div className="mb-2 text-xs font-medium text-muted-foreground">Power</div>
+      <ResponsiveContainer width="100%" height={160}>
+        <LineChart data={history}>
+          <CartesianGrid strokeDasharray="3 3" stroke={chartStyle.grid} />
+          <XAxis dataKey="time" tick={chartStyle.tick} interval="preserveStartEnd" minTickGap={60} />
+          <YAxis
+            tick={chartStyle.tick}
+            width={45}
+            domain={[0, "auto"]}
+            label={{ value: "W", position: "insideTopLeft", fill: POWER_COLOR, fontSize: 11, dy: -10 }}
+          />
+          <Tooltip contentStyle={chartStyle.tooltip} labelStyle={chartStyle.label} />
+          <Line
+            type="monotone"
+            dataKey="power"
+            name="Power"
+            stroke={POWER_COLOR}
+            strokeWidth={2}
+            dot={false}
+            isAnimationActive={false}
+          />
+        </LineChart>
+      </ResponsiveContainer>
     </div>
   )
 }
