@@ -83,11 +83,11 @@ void PsuManager::Record(Psu& psu)
 {
     auto point = app_.getStrux().getTelemetryManager().Measure("psu");
 
-    // The mode is a TAG and not a field — it is what an Influx query groups
-    // by — so it is the one thing here that is still named. Every field comes
-    // off the chain under the telemetry name its driver gave it.
-    point.Tag("mode", psu.Flag(PsuKey::ConstantCurrent) ? "cc" : "cv");
-
+    // Nothing here is named: every field comes off the chain under the
+    // telemetry name its driver gave it, the CC flag included. It used to be a
+    // TAG, which is exactly wrong — a tag is part of the series key, so flipping
+    // CC↔CV split `voltage` and `current` into a second series that Influx drew
+    // in another colour, each half gapped where the other was live.
     for (const PsuCapability& c : psu)
     {
         // A capability with no telemetry name is not recorded, and one the

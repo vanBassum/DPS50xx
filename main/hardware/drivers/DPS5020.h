@@ -56,7 +56,7 @@ private:
     Measurement inputVoltage_  { "inputVoltage", "Input Voltage", "V", Reg{0x0005, 0.01f}, "inputVoltage" };
     Switch      keyLock_       { "keyLock", "Key Lock", Reg{0x0006} };
     Selector    protectionState_{ "protectionState", "Protection", Reg{0x0007}, kProtection };
-    StateFlag   constantCurrent_ { "constantCurrent", "Constant Current", Reg{0x0008} };
+    StateFlag   constantCurrent_ { "constantCurrent", "Constant Current", Reg{0x0008}, "cc" };
     Switch      outputEnabled_ { "outputEnabled", "Output", Reg{0x0009}, "output" };
     Setpoint    backlight_     { "backlight", "Backlight", "", Reg{0x000A}, 0.0f, 5.0f };
     DeviceInfo  model_         { "model", "Model", Reg{0x000B} };

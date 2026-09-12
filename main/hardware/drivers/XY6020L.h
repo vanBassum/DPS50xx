@@ -129,7 +129,7 @@ private:
 
     Switch   keyLock_         { "keyLock", "Key Lock", Reg{0x000F} };
     Selector protectionState_ { "protectionState", "Protection", Reg{0x0010}, kProtection };
-    StateFlag constantCurrent_ { "constantCurrent", "Constant Current", Reg{0x0011} };
+    StateFlag constantCurrent_ { "constantCurrent", "Constant Current", Reg{0x0011}, "cc" };
     Switch   outputEnabled_   { "outputEnabled", "Output", Reg{0x0012}, "output" };
 
     // ── Identity: a second transaction ──
