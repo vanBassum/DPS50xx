@@ -17,6 +17,7 @@ import { useLatestRelease } from "@/hooks/use-latest-release"
 import { isNewerVersion } from "@/lib/version"
 import { PreReleaseBadge } from "@/components/PreReleaseBadge"
 import { DeviceInfoDialog } from "@/components/DeviceInfoDialog"
+import { QuickActions } from "@/components/QuickActions"
 
 // "Supply" is the product's own screen and stays the "home" page, so a bookmark
 // to "/" still lands on it.
@@ -91,6 +92,9 @@ export function AppSidebar({ currentPage, onNavigate }: AppSidebarProps) {
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
+        {/* Pinned to the bottom of the content, not the footer: these are things you
+            DO to the device, and the footer is what the device IS. */}
+        <QuickActions />
       </SidebarContent>
       {/* The footer is the way in to the device's details. It already shows the
           version and the link state, so it is where somebody looks when they want to
